@@ -1,0 +1,310 @@
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use mdview::{Flow, Viewer, theme};
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
+use ratatui::buffer::Buffer;
+use ratatui::style::Modifier;
+use unicode_width::UnicodeWidthStr;
+
+fn draw(viewer: &mut Viewer, width: u16, height: u16) -> Buffer {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|frame| viewer.draw(frame)).unwrap();
+    terminal.backend().buffer().clone()
+}
+
+/// Each row as a reader sees it, with a wide character counted once and trailing blanks cut.
+fn rows(buffer: &Buffer) -> Vec<String> {
+    (0..buffer.area.height)
+        .map(|y| {
+            let mut row = String::new();
+            let mut x = 0;
+            while x < buffer.area.width {
+                let symbol = buffer[(x, y)].symbol();
+                row.push_str(symbol);
+                x += u16::try_from(symbol.width().max(1)).unwrap();
+            }
+            row.trim_end().to_string()
+        })
+        .collect()
+}
+
+fn body(buffer: &Buffer) -> Vec<String> {
+    let mut all = rows(buffer);
+    all.pop();
+    all
+}
+
+fn status(buffer: &Buffer) -> String {
+    rows(buffer).pop().unwrap()
+}
+
+fn shown(markdown: &str, width: u16, height: u16) -> Vec<String> {
+    body(&draw(&mut Viewer::new("doc.md", markdown), width, height))
+}
+
+fn press(viewer: &mut Viewer, code: KeyCode) -> Flow {
+    viewer.handle_key(KeyEvent::new(code, KeyModifiers::NONE))
+}
+
+fn find(buffer: &Buffer, text: &str) -> (u16, u16) {
+    rows(buffer)
+        .iter()
+        .enumerate()
+        .find_map(|(y, row)| {
+            row.find(text)
+                .map(|byte| (row[..byte].width() as u16, y as u16))
+        })
+        .unwrap_or_else(|| panic!("{text:?} is not on screen"))
+}
+
+/// A heading and a paragraph render as text without their Markdown marks, wrapped at the width.
+///
+/// Why it matters: the preview must read like the rendered page, not like the source.
+#[test]
+fn renders_heading_and_paragraph_without_markup() {
+    // Given: a heading and a paragraph with emphasis, wider than the screen
+    let markdown = "# Title\n\nSome **bold** and *italic* text that wraps across lines.\n";
+
+    // When: it is drawn 32 columns wide, which leaves 30 for text between the margins
+    let screen = shown(markdown, 32, 8);
+
+    // Then: the heading sits on its rule, and the paragraph wraps at a word boundary
+    assert_eq!(
+        screen,
+        [
+            " Title",
+            &format!(" {}", "━".repeat(30)),
+            "",
+            " Some bold and italic text that",
+            " wraps across lines.",
+            "",
+            "",
+        ]
+    );
+}
+
+/// Wide characters take two columns, so a line wraps before it overflows the screen.
+///
+/// Why it matters: an emoji counted as one column pushes text past the edge and garbles the row.
+#[test]
+fn wraps_wide_characters_by_their_display_width() {
+    // Given: a paragraph with a joined emoji, and a run of CJK text with no spaces
+    let markdown = "Text 🧑🏻‍🍳 chefs cook well\n\n日本語のテキストです\n";
+
+    // When: it is drawn with 10 columns for text
+    let screen = shown(markdown, 12, 7);
+
+    // Then: the emoji stays whole, and the unbroken run splits between characters
+    assert_eq!(
+        screen,
+        [
+            " Text 🧑🏻‍🍳",
+            " chefs cook",
+            " well",
+            "",
+            " 日本語のテ",
+            " キストです",
+        ]
+    );
+}
+
+/// Lists show their markers, and wrapped item text lines up under the item, not the marker.
+///
+/// Why it matters: a continuation line under the marker makes one item read as two.
+#[test]
+fn renders_nested_and_ordered_lists() {
+    // Given: a bullet list with a nested list, then an ordered list
+    let markdown = "- one\n- two is longer than the width\n  - nested\n\n1. first\n2. second\n";
+
+    // When: it is drawn with 20 columns for text
+    let screen = shown(markdown, 22, 9);
+
+    // Then: the markers lead, and the nested list indents under its parent's text
+    assert_eq!(
+        screen,
+        [
+            " • one",
+            " • two is longer than",
+            "   the width",
+            "   • nested",
+            "",
+            " 1. first",
+            " 2. second",
+            "",
+        ]
+    );
+}
+
+/// A block quote keeps its bar on every wrapped line.
+///
+/// Why it matters: without the bar, the second line of a quote reads as the author's own text.
+#[test]
+fn keeps_the_quote_bar_on_wrapped_lines() {
+    // Given: a quote longer than the screen
+    let markdown = "> A quote that wraps onto two lines\n";
+
+    // When: it is drawn with 20 columns for text
+    let screen = shown(markdown, 22, 4);
+
+    // Then: both lines carry the bar
+    assert_eq!(screen, [" ▎ A quote that wraps", " ▎ onto two lines", ""]);
+}
+
+/// A code block keeps its indentation and line breaks, and hard-wraps a line wider than the screen.
+///
+/// Why it matters: reflowing code like prose destroys the indentation that carries its meaning.
+#[test]
+fn keeps_code_block_layout() {
+    // Given: a fenced code block with an indented line and a line wider than the screen
+    let markdown = "```rust\nfn main() {\n    print!(\"hi\");\n}\nlet long = 1234567890;\n```\n";
+
+    // When: it is drawn with 20 columns for text, 18 inside the block's padding
+    let screen = shown(markdown, 22, 10);
+
+    // Then: the lines keep their layout inside a padded block
+    assert_eq!(
+        screen,
+        [
+            "",
+            "  fn main() {",
+            "      print!(\"hi\");",
+            "  }",
+            "  let long = 1234567",
+            "  890;",
+            "",
+            "",
+            "",
+        ]
+    );
+}
+
+/// A thematic break draws a rule across the text width.
+///
+/// Why it matters: the break separates sections, and without it two sections run together.
+#[test]
+fn draws_a_thematic_break() {
+    // Given: two paragraphs with a break between them
+    let markdown = "above\n\n---\n\nbelow\n";
+
+    // When: it is drawn with 20 columns for text
+    let screen = shown(markdown, 22, 6);
+
+    // Then: a rule sits between them
+    assert_eq!(
+        screen,
+        [" above", "", &format!(" {}", "─".repeat(20)), "", " below"]
+    );
+}
+
+/// Each kind of text takes its colour and weight from the Rose Pine reading palette.
+///
+/// Why it matters: the styles are how a reader tells a heading, a link and code apart at a glance.
+#[test]
+fn styles_text_with_the_reading_palette() {
+    // Given: a heading, and a paragraph with bold, italic, struck, linked and code text
+    let markdown =
+        "# Head\n\n### Sub\n\n**bold** *soft* ~~gone~~ [link](https://example.com) `code`\n";
+
+    // When: it is drawn
+    let buffer = draw(&mut Viewer::new("doc.md", markdown), 60, 10);
+    let cell = |text: &str| buffer[find(&buffer, text)].clone();
+
+    // Then: each kind carries its own style
+    assert!(cell("Head").modifier.contains(Modifier::BOLD));
+    assert_eq!(cell("━").fg, theme::ROSE);
+    assert_eq!(cell("Sub").fg, theme::FOAM);
+    assert!(cell("bold").modifier.contains(Modifier::BOLD));
+    assert!(cell("soft").modifier.contains(Modifier::ITALIC));
+    assert_eq!(cell("soft").fg, theme::SUBTLE);
+    assert!(cell("gone").modifier.contains(Modifier::CROSSED_OUT));
+    assert_eq!(cell("link").fg, theme::FOAM);
+    assert_eq!(cell("code").fg, theme::ROSE);
+    assert_eq!(cell("code").bg, theme::OVERLAY);
+}
+
+/// The scroll keys move through the page, stop at both ends, and the status line shows where.
+///
+/// Why it matters: a scroll that runs past the end shows a blank screen and loses the reader.
+#[test]
+fn scrolls_with_the_keys_and_stops_at_the_ends() {
+    // Given: a list of 20 items on a screen with 5 rows for text
+    let markdown: String = (1..=20).map(|n| format!("- item {n}\n")).collect();
+    let mut viewer = Viewer::new("doc.md", &markdown);
+    let first_row = |viewer: &mut Viewer| body(&draw(viewer, 30, 6))[0].clone();
+    assert_eq!(first_row(&mut viewer), " • item 1");
+    assert!(status(&draw(&mut viewer, 30, 6)).ends_with("25%"));
+
+    // When: the reader scrolls up at the top
+    press(&mut viewer, KeyCode::Char('k'));
+    // Then: the page stays at the top
+    assert_eq!(first_row(&mut viewer), " • item 1");
+
+    // When: the reader scrolls down one line, then one page
+    press(&mut viewer, KeyCode::Char('j'));
+    assert_eq!(first_row(&mut viewer), " • item 2");
+    press(&mut viewer, KeyCode::PageDown);
+    // Then: the page moves by the rows it shows
+    assert_eq!(first_row(&mut viewer), " • item 7");
+
+    // When: the reader jumps to the end
+    press(&mut viewer, KeyCode::Char('G'));
+    // Then: the last item sits on the last row, and the status line says 100%
+    let buffer = draw(&mut viewer, 30, 6);
+    assert_eq!(
+        body(&buffer),
+        [
+            " • item 16",
+            " • item 17",
+            " • item 18",
+            " • item 19",
+            " • item 20"
+        ]
+    );
+    assert!(status(&buffer).starts_with(" doc.md"));
+    assert!(status(&buffer).ends_with("100%"));
+
+    // When: the reader scrolls down at the end, then jumps to the top
+    press(&mut viewer, KeyCode::Char('j'));
+    assert_eq!(first_row(&mut viewer), " • item 16");
+    press(&mut viewer, KeyCode::Char('g'));
+    // Then: the page is back at the top
+    assert_eq!(first_row(&mut viewer), " • item 1");
+}
+
+/// The quit keys end the viewer, and other keys keep it open.
+///
+/// Why it matters: a viewer that ignores q traps the reader in the terminal.
+#[test]
+fn quits_on_q() {
+    // Given: an open viewer
+    let mut viewer = Viewer::new("doc.md", "text\n");
+
+    // Then: a scroll key keeps it open, and q ends it
+    assert_eq!(press(&mut viewer, KeyCode::Char('j')), Flow::Continue);
+    assert_eq!(press(&mut viewer, KeyCode::Char('q')), Flow::Quit);
+}
+
+/// A resize reflows the text and keeps the block the reader was on at the top.
+///
+/// Why it matters: a resize that jumps to another part of the page loses the reader's place.
+#[test]
+fn keeps_the_reading_position_across_a_resize() {
+    // Given: three paragraphs, scrolled so the second one is at the top of a wide screen
+    let markdown = "first paragraph\n\nsecond paragraph that wraps when narrow\n\nthird\n";
+    let mut viewer = Viewer::new("doc.md", markdown);
+    draw(&mut viewer, 60, 4);
+    press(&mut viewer, KeyCode::Char('j'));
+    press(&mut viewer, KeyCode::Char('j'));
+    assert_eq!(
+        body(&draw(&mut viewer, 60, 4))[0],
+        " second paragraph that wraps when narrow"
+    );
+
+    // When: the screen narrows so the paragraph wraps
+    let screen = body(&draw(&mut viewer, 22, 4));
+
+    // Then: the second paragraph still starts the screen
+    assert_eq!(screen, [" second paragraph", " that wraps when", " narrow"]);
+}

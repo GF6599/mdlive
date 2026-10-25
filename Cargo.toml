@@ -6,6 +6,11 @@ license = "MIT"
 description = "A terminal preview of a Markdown file that follows each save"
 
 [dependencies]
+crossterm = "0.29"
+pulldown-cmark = { version = "0.13", default-features = false }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+unicode-segmentation = "1"
+unicode-width = "0.2"
 
 [profile.release]
 lto = true
