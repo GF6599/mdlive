@@ -291,8 +291,10 @@ fn quits_on_q() {
 /// Why it matters: a resize that jumps to another part of the page loses the reader's place.
 #[test]
 fn keeps_the_reading_position_across_a_resize() {
-    // Given: three paragraphs, scrolled so the second one is at the top of a wide screen
-    let markdown = "first paragraph\n\nsecond paragraph that wraps when narrow\n\nthird\n";
+    // Given: three paragraphs, scrolled so the second one is at the top of a wide screen, where
+    // the first one also wraps when narrow and so pushes the second one down
+    let markdown =
+        "first paragraph that also wraps\n\nsecond paragraph that wraps when narrow\n\nthird\n";
     let mut viewer = Viewer::new("doc.md", markdown);
     draw(&mut viewer, 60, 4);
     press(&mut viewer, KeyCode::Char('j'));
