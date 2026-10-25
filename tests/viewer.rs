@@ -460,3 +460,157 @@ fn shows_code_in_an_unknown_language_as_plain_text() {
     assert_eq!(buffer[find(&buffer, "fn unknown")].fg, theme::TEXT);
     assert_eq!(buffer[find(&buffer, "fn bare")].fg, theme::TEXT);
 }
+
+/// A table draws its cells in a grid, aligned the way its delimiter row says.
+///
+/// Why it matters: a table is the densest content in the notes, and columns that do not line up
+/// cannot be read across.
+#[test]
+fn draws_a_table_aligned_by_its_delimiter_row() {
+    // Given: a table with a left, a centred and a right column
+    let markdown =
+        "| Name | Kind | Size |\n|:-----|:----:|-----:|\n| alpha | x | 1 |\n| beta | yy | 22 |\n";
+
+    // When: it is drawn with room to spare
+    let buffer = draw(&mut Viewer::new("doc.md", markdown), 42, 8);
+
+    // Then: the grid fits its content, and each column takes its alignment
+    assert_eq!(
+        body(&buffer)[..6],
+        [
+            " ┌───────┬──────┬──────┐",
+            " │ Name  │ Kind │ Size │",
+            " ├───────┼──────┼──────┤",
+            " │ alpha │  x   │    1 │",
+            " │ beta  │  yy  │   22 │",
+            " └───────┴──────┴──────┘",
+        ]
+    );
+    assert_eq!(buffer[find(&buffer, "Name")].fg, theme::SUBTLE);
+    assert!(
+        buffer[find(&buffer, "Name")]
+            .modifier
+            .contains(Modifier::BOLD)
+    );
+    assert_eq!(buffer[find(&buffer, "┌")].fg, theme::HL_MED);
+}
+
+/// A table wider than the screen narrows its widest column and wraps the cells in it.
+///
+/// Why it matters: a clipped table hides the end of every long cell, which is where the detail is.
+#[test]
+fn wraps_the_cells_of_a_table_wider_than_the_screen() {
+    // Given: a table whose second column is wider than the screen
+    let markdown = "| Key | Text |\n|-----|------|\n| a | a long text that wraps over lines |\n| b | short |\n";
+
+    // When: it is drawn with 20 columns for text
+    let screen = shown(markdown, 22, 12);
+
+    // Then: the wide column wraps, and rule lines separate the rows that now span several lines
+    assert_eq!(
+        screen[..9],
+        [
+            " ┌─────┬────────────┐",
+            " │ Key │ Text       │",
+            " ├─────┼────────────┤",
+            " │ a   │ a long     │",
+            " │     │ text that  │",
+            " │     │ wraps over │",
+            " │     │ lines      │",
+            " ├─────┼────────────┤",
+            " │ b   │ short      │",
+        ]
+    );
+    assert_eq!(screen[9], " └─────┴────────────┘");
+}
+
+/// A task list shows a box per item, ticked for a done item.
+///
+/// Why it matters: the box is the whole point of a task list, and without it done and open items
+/// read alike.
+#[test]
+fn shows_task_list_boxes() {
+    // Given: an open task and a done task
+    let markdown = "- [ ] write tests\n- [x] ship\n";
+
+    // When: it is drawn
+    let screen = shown(markdown, 30, 4);
+
+    // Then: each item shows its box in place of the bullet
+    assert_eq!(screen[..2], [" ☐ write tests", " ☑ ship"]);
+}
+
+/// An alert block shows its kind as a label, and its bar and label take the kind's colour.
+///
+/// Why it matters: a warning that looks like a plain quote is a warning nobody notices.
+#[test]
+fn labels_and_colours_alert_blocks() {
+    // Given: a warning alert, then a plain quote
+    let markdown = "> [!WARNING]\n> Mind the gap.\n\n> plain quote\n";
+
+    // When: it is drawn
+    let buffer = draw(&mut Viewer::new("doc.md", markdown), 30, 6);
+
+    // Then: the alert carries its label over its text, and the plain quote has none
+    assert_eq!(
+        body(&buffer),
+        [" ▎ Warning", " ▎ Mind the gap.", "", " ▎ plain quote", ""]
+    );
+    assert_eq!(buffer[(1, 0)].fg, theme::GOLD);
+    assert_eq!(buffer[find(&buffer, "Warning")].fg, theme::GOLD);
+    assert_eq!(buffer[find(&buffer, "Mind")].fg, theme::TEXT);
+    assert_eq!(buffer[(1, 3)].fg, theme::ROSE);
+}
+
+/// Footnote references show as superscript numbers in the order they are read, and the notes
+/// gather at the end of the page.
+///
+/// Why it matters: a note shown where it is defined interrupts the text, and a number that
+/// follows the source order instead of the reading order sends the reader to the wrong note.
+#[test]
+fn numbers_footnotes_in_reading_order_and_lists_them_at_the_end() {
+    // Given: two references, with their notes defined in the other order, mid-page
+    let markdown = "Text[^b] and[^a].\n\n[^a]: Ay.\n[^b]: Bee.\n\nAfter.\n";
+
+    // When: it is drawn with 28 columns for text
+    let screen = shown(markdown, 30, 11);
+
+    // Then: the text reads on, and the notes follow a rule at the end
+    assert_eq!(
+        screen,
+        [
+            " Text¹ and².",
+            "",
+            " After.",
+            "",
+            &format!(" {}", "─".repeat(28)),
+            "",
+            " 1. Bee.",
+            "",
+            " 2. Ay.",
+            "",
+        ]
+    );
+}
+
+/// A resize keeps the reader's place on a page whose notes are defined in the middle.
+///
+/// Why it matters: the notes draw at the end but come from the middle of the source, and a
+/// position that maps through them lands the reader on the wrong paragraph.
+#[test]
+fn keeps_the_reading_position_on_a_page_with_notes_defined_mid_page() {
+    // Given: a note defined mid-page, and a reader scrolled to the last paragraph
+    let markdown = "Intro[^n] text\n\n[^n]: Note.\n\nmiddle\n\nend paragraph\n";
+    let mut viewer = Viewer::new("doc.md", markdown);
+    draw(&mut viewer, 60, 4);
+    for _ in 0..4 {
+        press(&mut viewer, KeyCode::Char('j'));
+    }
+    assert_eq!(body(&draw(&mut viewer, 60, 4))[0], " end paragraph");
+
+    // When: the screen narrows
+    let screen = body(&draw(&mut viewer, 40, 4));
+
+    // Then: the same paragraph is still at the top
+    assert_eq!(screen[0], " end paragraph");
+}

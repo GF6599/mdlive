@@ -1,5 +1,6 @@
 //! Rose Pine (main) in the Glance reading idiom, mapped the way `doc.css` maps it for a page.
 
+use pulldown_cmark::BlockQuoteKind;
 use ratatui::style::{Color, Modifier, Style};
 
 pub const BASE: Color = Color::Rgb(0x19, 0x17, 0x24);
@@ -14,6 +15,7 @@ pub const ROSE: Color = Color::Rgb(0xeb, 0xbc, 0xba);
 pub const PINE: Color = Color::Rgb(0x31, 0x74, 0x8f);
 pub const FOAM: Color = Color::Rgb(0x9c, 0xcf, 0xd8);
 pub const IRIS: Color = Color::Rgb(0xc4, 0xa7, 0xe7);
+pub const LEAF: Color = Color::Rgb(0x95, 0xb1, 0xac);
 pub const HL_MED: Color = Color::Rgb(0x40, 0x3d, 0x52);
 
 pub fn page() -> Style {
@@ -52,6 +54,24 @@ pub fn rule() -> Style {
 
 pub fn marker() -> Style {
     Style::new().fg(ROSE)
+}
+
+pub fn alert(kind: BlockQuoteKind) -> Style {
+    Style::new().fg(match kind {
+        BlockQuoteKind::Note => FOAM,
+        BlockQuoteKind::Tip => LEAF,
+        BlockQuoteKind::Important => IRIS,
+        BlockQuoteKind::Warning => GOLD,
+        BlockQuoteKind::Caution => LOVE,
+    })
+}
+
+pub fn alert_label(kind: BlockQuoteKind) -> Style {
+    alert(kind).add_modifier(Modifier::BOLD)
+}
+
+pub fn table_header() -> Style {
+    Style::new().fg(SUBTLE).add_modifier(Modifier::BOLD)
 }
 
 pub fn quote() -> Style {

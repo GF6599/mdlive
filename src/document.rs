@@ -1,17 +1,23 @@
 use std::ops::Range;
 
-use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{
+    Alignment, BlockQuoteKind, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
+};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
 use crate::highlight::highlight;
+use crate::table::{self, Cell};
 use crate::theme;
 use crate::wrap::{BREAK, hard_wrap, wrap};
 
 const BULLET: &str = "• ";
 const QUOTE_BAR: &str = "▎ ";
 const TAB: &str = "    ";
+const OPEN_TASK: &str = "☐ ";
+const DONE_TASK: &str = "☑ ";
+const SUPERSCRIPT_DIGITS: [char; 10] = ['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'];
 
 /// A Markdown source laid out for one text width.
 #[derive(Debug, Default)]
@@ -107,7 +113,7 @@ impl Document {
 
 #[derive(Debug)]
 enum Container {
-    Quote,
+    Quote(Option<BlockQuoteKind>),
     Item { marker: String, shown: bool },
 }
 
@@ -127,7 +133,13 @@ enum Block {
     Raw {
         text: String,
     },
+    Table {
+        alignments: Vec<Alignment>,
+        rows: Vec<Vec<Cell>>,
+    },
 }
+
+type Footnote = (String, Vec<(Event<'static>, Range<usize>)>);
 
 struct Builder {
     width: usize,
@@ -138,6 +150,10 @@ struct Builder {
     styles: Vec<Style>,
     block: Option<(Block, usize)>,
     gap: bool,
+    /// Footnote labels in the order the text first refers to them, which gives their numbers.
+    footnote_order: Vec<String>,
+    /// Each footnote's events, held back so the notes can be drawn at the end of the page.
+    footnotes: Vec<Footnote>,
 }
 
 impl Builder {
@@ -154,17 +170,73 @@ impl Builder {
             styles: Vec::new(),
             block: None,
             gap: false,
+            footnote_order: Vec::new(),
+            footnotes: Vec::new(),
         }
     }
 
     fn build(mut self, markdown: &str) -> Document {
-        for (event, range) in
-            Parser::new_ext(markdown, Options::ENABLE_STRIKETHROUGH).into_offset_iter()
-        {
-            self.event(event, range);
+        let options = Options::ENABLE_STRIKETHROUGH
+            | Options::ENABLE_TABLES
+            | Options::ENABLE_TASKLISTS
+            | Options::ENABLE_FOOTNOTES
+            | Options::ENABLE_GFM;
+        let mut footnote: Option<Footnote> = None;
+        for (event, range) in Parser::new_ext(markdown, options).into_offset_iter() {
+            match (event, &mut footnote) {
+                (Event::Start(Tag::FootnoteDefinition(label)), _) => {
+                    footnote = Some((label.to_string(), Vec::new()));
+                }
+                (Event::End(TagEnd::FootnoteDefinition), _) => {
+                    self.footnotes.extend(footnote.take());
+                }
+                (event, Some((_, events))) => events.push((event.into_static(), range)),
+                (event, None) => self.event(event, range),
+            }
         }
         self.finish_block();
+        self.push_footnotes();
         self.document
+    }
+
+    fn footnote_number(&mut self, label: &str) -> usize {
+        let index = self
+            .footnote_order
+            .iter()
+            .position(|known| known == label)
+            .unwrap_or_else(|| {
+                self.footnote_order.push(label.to_string());
+                self.footnote_order.len() - 1
+            });
+        index + 1
+    }
+
+    /// Draws the notes under a rule, numbered in reading order. A note the text never refers to
+    /// still shows, after the others.
+    fn push_footnotes(&mut self) {
+        if self.footnotes.is_empty() {
+            return;
+        }
+        let mut notes = std::mem::take(&mut self.footnotes);
+        notes.sort_by_key(|(label, _)| {
+            self.footnote_order
+                .iter()
+                .position(|known| known == label)
+                .unwrap_or(usize::MAX)
+        });
+        self.event(Event::Rule, 0..0);
+        for (label, events) in notes {
+            let number = self.footnote_number(&label);
+            self.containers.push(Container::Item {
+                marker: format!("{number}. "),
+                shown: false,
+            });
+            for (event, range) in events {
+                self.event(event, range);
+            }
+            self.finish_block();
+            self.containers.pop();
+        }
     }
 
     fn source_line(&self, offset: usize) -> usize {
@@ -196,6 +268,15 @@ impl Builder {
                 if let Some((Block::Raw { text }, _)) = &mut self.block {
                     text.push_str(&html);
                 }
+            }
+            Event::TaskListMarker(done) => {
+                if let Some(Container::Item { marker, .. }) = self.containers.last_mut() {
+                    *marker = (if done { DONE_TASK } else { OPEN_TASK }).to_string();
+                }
+            }
+            Event::FootnoteReference(label) => {
+                let number = self.footnote_number(&label);
+                self.inline(&superscript(number), range, theme::link());
             }
             Event::SoftBreak => self.inline(" ", range, Style::new()),
             Event::HardBreak => self.inline(BREAK, range, Style::new()),
@@ -243,9 +324,15 @@ impl Builder {
                     range.start,
                 );
             }
-            Tag::BlockQuote(_) => {
+            Tag::BlockQuote(kind) => {
                 self.finish_block();
-                self.containers.push(Container::Quote);
+                self.blank_before_block();
+                self.containers.push(Container::Quote(kind));
+                if let Some(kind) = kind {
+                    let label = Span::styled(alert_label(kind), theme::alert_label(kind));
+                    let line = self.source_line(range.start);
+                    self.push_line(vec![label], true, line);
+                }
             }
             Tag::List(start) => {
                 self.finish_block();
@@ -266,6 +353,25 @@ impl Builder {
                     shown: false,
                 });
             }
+            Tag::Table(alignments) => self.open(
+                Block::Table {
+                    alignments,
+                    rows: Vec::new(),
+                },
+                range.start,
+            ),
+            Tag::TableHead | Tag::TableRow => {
+                if let Some((Block::Table { rows, .. }, _)) = &mut self.block {
+                    rows.push(Vec::new());
+                }
+            }
+            Tag::TableCell => {
+                if let Some((Block::Table { rows, .. }, _)) = &mut self.block
+                    && let Some(row) = rows.last_mut()
+                {
+                    row.push(Vec::new());
+                }
+            }
             Tag::Emphasis => self.styles.push(theme::emphasis()),
             Tag::Strong => self.styles.push(theme::strong()),
             Tag::Strikethrough => self.styles.push(theme::strikethrough()),
@@ -276,7 +382,11 @@ impl Builder {
 
     fn end(&mut self, tag: TagEnd) {
         match tag {
-            TagEnd::Paragraph | TagEnd::Heading(_) | TagEnd::CodeBlock | TagEnd::HtmlBlock => {
+            TagEnd::Paragraph
+            | TagEnd::Heading(_)
+            | TagEnd::CodeBlock
+            | TagEnd::HtmlBlock
+            | TagEnd::Table => {
                 self.finish_block();
                 self.gap = true;
             }
@@ -313,7 +423,7 @@ impl Builder {
         if self
             .containers
             .iter()
-            .any(|container| matches!(container, Container::Quote))
+            .any(|container| matches!(container, Container::Quote(None)))
         {
             theme::quote()
         } else {
@@ -357,6 +467,11 @@ impl Builder {
                     theme::heading(*level).patch(style),
                 ));
             }
+            Some((Block::Table { rows, .. }, _)) => {
+                if let Some(cell) = rows.last_mut().and_then(|row| row.last_mut()) {
+                    cell.push(Span::styled(text.to_string(), style));
+                }
+            }
             _ => {}
         }
     }
@@ -390,6 +505,14 @@ impl Builder {
                 }
             }
             Block::Code { text, language } => self.push_code(&text, &language, width, line),
+            Block::Table { alignments, rows } => {
+                for (index, row) in table::lay_out(&rows, &alignments, width)
+                    .into_iter()
+                    .enumerate()
+                {
+                    self.push_line(row, index == 0, line);
+                }
+            }
             Block::Raw { text } => {
                 let mut first = true;
                 for row in text.trim_end_matches('\n').lines() {
@@ -458,7 +581,7 @@ impl Builder {
         let mut spans = Vec::new();
         for container in &mut self.containers {
             match container {
-                Container::Quote => spans.push(Span::styled(QUOTE_BAR, theme::marker())),
+                Container::Quote(kind) => spans.push(Span::styled(QUOTE_BAR, quote_bar(*kind))),
                 Container::Item { marker, shown } if first && !*shown => {
                     spans.push(Span::styled(marker.clone(), theme::marker()));
                     *shown = true;
@@ -467,6 +590,9 @@ impl Builder {
             }
         }
         spans.extend(content);
+        // The notes sit at the end of the page but may be defined anywhere, and a source line
+        // that steps back would break the search that maps source lines to screen lines.
+        let source = source.max(self.document.sources.last().copied().unwrap_or(0));
         self.document.lines.push(Line::from(spans));
         self.document.sources.push(source);
     }
@@ -474,9 +600,32 @@ impl Builder {
 
 fn container_width(container: &Container) -> usize {
     match container {
-        Container::Quote => QUOTE_BAR.width(),
+        Container::Quote(_) => QUOTE_BAR.width(),
         Container::Item { marker, .. } => marker.width(),
     }
+}
+
+fn quote_bar(kind: Option<BlockQuoteKind>) -> Style {
+    kind.map_or_else(theme::marker, theme::alert)
+}
+
+fn alert_label(kind: BlockQuoteKind) -> &'static str {
+    match kind {
+        BlockQuoteKind::Note => "Note",
+        BlockQuoteKind::Tip => "Tip",
+        BlockQuoteKind::Important => "Important",
+        BlockQuoteKind::Warning => "Warning",
+        BlockQuoteKind::Caution => "Caution",
+    }
+}
+
+fn superscript(number: usize) -> String {
+    number
+        .to_string()
+        .chars()
+        .filter_map(|digit| digit.to_digit(10))
+        .map(|digit| SUPERSCRIPT_DIGITS[digit as usize])
+        .collect()
 }
 
 /// The language of a fence's info string, such as `rust` in `rust,ignore` or `ts title="x"`.
