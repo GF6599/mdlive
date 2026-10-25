@@ -129,7 +129,9 @@ impl Builder {
             Event::Code(code) => {
                 self.inline(&code, range, theme::inline_code());
             }
-            Event::InlineHtml(html) => self.inline(&html, range, theme::html()),
+            Event::InlineHtml(html) if !is_comment(&html) => {
+                self.inline(&html, range, theme::html());
+            }
             Event::Html(html) => {
                 if !matches!(self.block, Some((Block::Raw { .. }, _))) {
                     self.open(
@@ -309,6 +311,11 @@ impl Builder {
         let Some((block, line)) = self.block.take() else {
             return;
         };
+        if let Block::Raw { text } = &block
+            && is_comment(text)
+        {
+            return;
+        }
         self.blank_before_block();
         let width = self.content_width();
         match block {
@@ -395,6 +402,12 @@ fn container_width(container: &Container) -> usize {
         Container::Quote => QUOTE_BAR.width(),
         Container::Item { marker, .. } => marker.width(),
     }
+}
+
+/// A rendered page hides an HTML comment, so the preview does too.
+fn is_comment(html: &str) -> bool {
+    let html = html.trim();
+    html.starts_with("<!--") && html.ends_with("-->")
 }
 
 fn heading_level(level: HeadingLevel) -> u8 {

@@ -310,3 +310,33 @@ fn keeps_the_reading_position_across_a_resize() {
     // Then: the second paragraph still starts the screen
     assert_eq!(screen, [" second paragraph", " that wraps when", " narrow"]);
 }
+
+/// Raw HTML shows as muted source text, and an HTML comment shows nothing, as in a rendered page.
+///
+/// Why it matters: a comment is a note to the author, and printing it puts hidden text in front of
+/// the reader, while dropping other HTML would lose content without a trace.
+#[test]
+fn shows_html_as_source_and_hides_comments() {
+    // Given: an HTML block, a paragraph with inline HTML and an inline comment, and a block comment
+    let markdown = "<details>\n<summary>More</summary>\n</details>\n\nkeep <kbd>K</kbd><!-- note --> this\n\n<!--\nhidden\n-->\n\nend\n";
+
+    // When: it is drawn
+    let buffer = draw(&mut Viewer::new("doc.md", markdown), 40, 9);
+
+    // Then: the HTML shows in the muted colour, and neither comment appears
+    assert_eq!(
+        body(&buffer),
+        [
+            " <details>",
+            " <summary>More</summary>",
+            " </details>",
+            "",
+            " keep <kbd>K</kbd> this",
+            "",
+            " end",
+            "",
+        ]
+    );
+    assert_eq!(buffer[find(&buffer, "<summary>")].fg, theme::MUTED);
+    assert_eq!(buffer[find(&buffer, "<kbd>")].fg, theme::MUTED);
+}
