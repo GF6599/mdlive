@@ -113,18 +113,17 @@ pub fn wrap(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> {
     lines.done
 }
 
-pub fn hard_wrap(line: &str, width: usize) -> Vec<String> {
-    let mut rows = vec![String::new()];
-    let mut used = 0;
-    for grapheme in line.graphemes(true) {
-        if used + grapheme.width() > width && used > 0 {
-            rows.push(String::new());
-            used = 0;
-        }
-        used += grapheme.width();
-        if let Some(row) = rows.last_mut() {
-            row.push_str(grapheme);
+/// Splits a line into rows of `width` columns at any grapheme, the way code wraps in a panel.
+pub fn hard_wrap(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> {
+    let mut lines = Lines::default();
+    for span in spans {
+        for grapheme in span.content.graphemes(true) {
+            if lines.used + grapheme.width() > width && lines.used > 0 {
+                lines.end_line();
+            }
+            lines.push(grapheme, span.style);
         }
     }
-    rows
+    lines.end_line();
+    lines.done
 }

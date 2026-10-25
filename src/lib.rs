@@ -1,4 +1,5 @@
 mod document;
+mod highlight;
 pub mod theme;
 mod watch;
 mod wrap;

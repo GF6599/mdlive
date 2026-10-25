@@ -419,3 +419,44 @@ fn shows_a_read_error_and_keeps_the_last_render() {
     // Then: the error is gone
     assert!(!status(&draw(&mut viewer, 60, 4)).contains("No such file"));
 }
+
+/// Code takes the colours of its language, and a wrapped line keeps the panel behind it.
+///
+/// Why it matters: colour is how a reader scans code for its strings, keywords and comments, and a
+/// gap in the panel on a wrapped row breaks the block apart.
+#[test]
+fn highlights_code_by_its_language() {
+    // Given: a Rust block with a line wider than the panel, and a TypeScript block
+    let markdown = "```rust\nfn main() { let s = \"hi\"; } // a note that runs past the edge\n```\n\n```ts\nconst count: number = 1;\n```\n";
+
+    // When: it is drawn with 40 columns for text
+    let buffer = draw(&mut Viewer::new("doc.md", markdown), 42, 12);
+    let cell = |text: &str| buffer[find(&buffer, text)].clone();
+
+    // Then: keywords, strings and comments each take their colour
+    assert_eq!(cell("fn").fg, theme::PINE);
+    assert_eq!(cell("\"hi\"").fg, theme::GOLD);
+    assert_eq!(cell("// a note").fg, theme::MUTED);
+    assert!(cell("// a note").modifier.contains(Modifier::ITALIC));
+    assert_eq!(cell("const").fg, theme::PINE);
+
+    // And: the wrapped row of the comment keeps the panel to its last column
+    let (_, wrapped) = find(&buffer, "past the edge");
+    assert_eq!(buffer[(40, wrapped)].bg, theme::SURFACE);
+}
+
+/// Code in an unknown language, or with no language, shows as plain text on the panel.
+///
+/// Why it matters: a guessed grammar colours code wrongly, which reads worse than no colour.
+#[test]
+fn shows_code_in_an_unknown_language_as_plain_text() {
+    // Given: a block in a language with no grammar, and a block with no language
+    let markdown = "```nosuchlang\nfn unknown\n```\n\n```\nfn bare\n```\n";
+
+    // When: it is drawn
+    let buffer = draw(&mut Viewer::new("doc.md", markdown), 42, 10);
+
+    // Then: both show in the plain text colour
+    assert_eq!(buffer[find(&buffer, "fn unknown")].fg, theme::TEXT);
+    assert_eq!(buffer[find(&buffer, "fn bare")].fg, theme::TEXT);
+}

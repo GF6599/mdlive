@@ -1,10 +1,11 @@
 use std::ops::Range;
 
-use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
+use crate::highlight::highlight;
 use crate::theme;
 use crate::wrap::{BREAK, hard_wrap, wrap};
 
@@ -121,6 +122,7 @@ enum Block {
     },
     Code {
         text: String,
+        language: String,
     },
     Raw {
         text: String,
@@ -228,12 +230,19 @@ impl Builder {
                     range.start,
                 );
             }
-            Tag::CodeBlock(_) => self.open(
-                Block::Code {
-                    text: String::new(),
-                },
-                range.start,
-            ),
+            Tag::CodeBlock(kind) => {
+                let language = match kind {
+                    CodeBlockKind::Fenced(info) => fence_language(&info).to_string(),
+                    CodeBlockKind::Indented => String::new(),
+                };
+                self.open(
+                    Block::Code {
+                        text: String::new(),
+                        language,
+                    },
+                    range.start,
+                );
+            }
             Tag::BlockQuote(_) => {
                 self.finish_block();
                 self.containers.push(Container::Quote);
@@ -320,7 +329,7 @@ impl Builder {
 
     fn text(&mut self, text: &str, range: Range<usize>) {
         match &mut self.block {
-            Some((Block::Code { text: code }, _)) => code.push_str(text),
+            Some((Block::Code { text: code, .. }, _)) => code.push_str(text),
             Some((Block::Raw { text: raw }, _)) => raw.push_str(text),
             _ => self.inline(text, range, Style::new()),
         }
@@ -380,12 +389,12 @@ impl Builder {
                     self.push_line(vec![Span::styled(glyph.repeat(width), style)], false, line);
                 }
             }
-            Block::Code { text } => self.push_code(&text, width, line),
+            Block::Code { text, language } => self.push_code(&text, &language, width, line),
             Block::Raw { text } => {
                 let mut first = true;
                 for row in text.trim_end_matches('\n').lines() {
-                    for part in hard_wrap(row, width) {
-                        self.push_line(vec![Span::styled(part, theme::html())], first, line);
+                    for part in hard_wrap(&[Span::styled(row.to_string(), theme::html())], width) {
+                        self.push_line(part, first, line);
                         first = false;
                     }
                 }
@@ -401,23 +410,35 @@ impl Builder {
 
     /// A code block keeps its own line breaks and sits on a filled panel, padded by one column
     /// and one row, so it reads as one block even when a line is blank.
-    fn push_code(&mut self, text: &str, width: usize, line: usize) {
+    fn push_code(&mut self, text: &str, language: &str, width: usize, line: usize) {
         let inner = width.saturating_sub(2).max(1);
-        let style = theme::code_block();
-        let fill = |content: String| {
-            let pad = width.saturating_sub(content.width() + 1);
-            vec![Span::styled(
-                format!(" {content}{}", " ".repeat(pad)),
-                style,
-            )]
+        let text = text.trim_end_matches('\n').replace('\t', TAB);
+        let rows = highlight(&text, language).unwrap_or_else(|| {
+            text.split('\n')
+                .map(|row| vec![Span::styled(row.to_string(), theme::code_block())])
+                .collect()
+        });
+        let panel = theme::code_block();
+        let fill = |content: Vec<Span<'static>>| {
+            let used: usize = content.iter().map(|span| span.content.width()).sum();
+            let mut spans = vec![Span::styled(" ", panel)];
+            spans.extend(content.into_iter().map(|span| {
+                let style = panel.patch(span.style);
+                span.style(style)
+            }));
+            spans.push(Span::styled(
+                " ".repeat(width.saturating_sub(used + 1)),
+                panel,
+            ));
+            spans
         };
-        self.push_line(fill(String::new()), true, line);
-        for row in text.trim_end_matches('\n').split('\n') {
-            for part in hard_wrap(&row.replace('\t', TAB), inner) {
+        self.push_line(fill(Vec::new()), true, line);
+        for row in rows {
+            for part in hard_wrap(&row, inner) {
                 self.push_line(fill(part), false, line);
             }
         }
-        self.push_line(fill(String::new()), false, line);
+        self.push_line(fill(Vec::new()), false, line);
     }
 
     fn blank_before_block(&mut self) {
@@ -456,6 +477,13 @@ fn container_width(container: &Container) -> usize {
         Container::Quote => QUOTE_BAR.width(),
         Container::Item { marker, .. } => marker.width(),
     }
+}
+
+/// The language of a fence's info string, such as `rust` in `rust,ignore` or `ts title="x"`.
+fn fence_language(info: &str) -> &str {
+    info.split(|c: char| c.is_whitespace() || c == ',' || c == '{')
+        .next()
+        .unwrap_or_default()
 }
 
 /// A rendered page hides an HTML comment, so the preview does too.
