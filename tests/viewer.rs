@@ -1,7 +1,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use mdview::{Flow, Viewer, theme};
+use mdlive::{Flow, Viewer, theme};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;

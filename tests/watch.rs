@@ -4,7 +4,7 @@ use std::fs;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::Duration;
 
-use mdview::watch_file;
+use mdlive::watch_file;
 
 const DEBOUNCE: Duration = Duration::from_millis(50);
 /// Several debounce windows, so an event that was going to arrive has arrived.

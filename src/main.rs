@@ -4,7 +4,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
-use mdview::{Flow, Viewer, watch_file};
+use mdlive::{Flow, Viewer, watch_file};
 
 /// Long enough to fold the writes of one editor save into one reload, short enough to feel live.
 const DEBOUNCE: Duration = Duration::from_millis(100);
@@ -19,13 +19,13 @@ enum Input {
 fn main() -> ExitCode {
     let mut args = std::env::args_os().skip(1);
     let (Some(path), None) = (args.next().map(PathBuf::from), args.next()) else {
-        eprintln!("usage: mdview <file.md>");
+        eprintln!("usage: mdlive <file.md>");
         return ExitCode::from(2);
     };
     let markdown = match std::fs::read_to_string(&path) {
         Ok(markdown) => markdown,
         Err(error) => {
-            eprintln!("mdview: {}: {error}", path.display());
+            eprintln!("mdlive: {}: {error}", path.display());
             return ExitCode::FAILURE;
         }
     };
@@ -41,7 +41,7 @@ fn main() -> ExitCode {
     }) {
         Ok(watch) => watch,
         Err(error) => {
-            eprintln!("mdview: cannot watch {}: {error}", path.display());
+            eprintln!("mdlive: cannot watch {}: {error}", path.display());
             return ExitCode::FAILURE;
         }
     };
@@ -58,7 +58,7 @@ fn main() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("mdview: {error}");
+            eprintln!("mdlive: {error}");
             ExitCode::FAILURE
         }
     }

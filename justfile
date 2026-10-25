@@ -37,10 +37,10 @@ check: lint test
 build:
     cargo build --locked --release
     mkdir -p dist
-    cp target/release/mdview dist/
-    codesign --force --sign - dist/mdview
+    cp target/release/mdlive dist/
+    codesign --force --sign - dist/mdlive
 
 # Install the dist binary to ~/self-made-bin/
 [group('deploy')]
 ship: build
-    cp dist/mdview ~/self-made-bin/
+    cp dist/mdlive ~/self-made-bin/
