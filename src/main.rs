@@ -1,8 +1,20 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyEventKind};
-use mdview::{Flow, Viewer};
+use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
+use mdview::{Flow, Viewer, watch_file};
+
+/// Long enough to fold the writes of one editor save into one reload, short enough to feel live.
+const DEBOUNCE: Duration = Duration::from_millis(100);
+
+enum Input {
+    Key(KeyEvent),
+    Resize,
+    Changed(Result<(), String>),
+    Closed(std::io::Error),
+}
 
 fn main() -> ExitCode {
     let mut args = std::env::args_os().skip(1);
@@ -22,8 +34,26 @@ fn main() -> ExitCode {
         |name| name.to_string_lossy().into_owned(),
     );
 
+    let (sender, inputs) = mpsc::channel();
+    let changes = sender.clone();
+    let _watch = match watch_file(&path, DEBOUNCE, move |change| {
+        let _ = changes.send(Input::Changed(change));
+    }) {
+        Ok(watch) => watch,
+        Err(error) => {
+            eprintln!("mdview: cannot watch {}: {error}", path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    std::thread::spawn(move || read_terminal(&sender));
+
     let mut terminal = ratatui::init();
-    let result = run(&mut terminal, Viewer::new(&title, &markdown));
+    let result = run(
+        &mut terminal,
+        Viewer::new(&title, &markdown),
+        &path,
+        &inputs,
+    );
     ratatui::restore();
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -34,14 +64,45 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(terminal: &mut ratatui::DefaultTerminal, mut viewer: Viewer) -> std::io::Result<()> {
+fn read_terminal(sender: &Sender<Input>) {
+    loop {
+        let input = match event::read() {
+            Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => Input::Key(key),
+            Ok(Event::Resize(..)) => Input::Resize,
+            Ok(_) => continue,
+            Err(error) => Input::Closed(error),
+        };
+        let closed = matches!(input, Input::Closed(_));
+        if sender.send(input).is_err() || closed {
+            return;
+        }
+    }
+}
+
+fn run(
+    terminal: &mut ratatui::DefaultTerminal,
+    mut viewer: Viewer,
+    path: &Path,
+    inputs: &Receiver<Input>,
+) -> std::io::Result<()> {
     loop {
         terminal.draw(|frame| viewer.draw(frame))?;
-        if let Event::Key(key) = event::read()?
-            && key.kind == KeyEventKind::Press
-            && viewer.handle_key(key) == Flow::Quit
-        {
+        let Ok(input) = inputs.recv() else {
             return Ok(());
+        };
+        match input {
+            Input::Key(key) => {
+                if viewer.handle_key(key) == Flow::Quit {
+                    return Ok(());
+                }
+            }
+            Input::Resize => {}
+            Input::Changed(Ok(())) => match std::fs::read_to_string(path) {
+                Ok(markdown) => viewer.reload(&markdown),
+                Err(error) => viewer.show_error(&format!("cannot read the file: {error}")),
+            },
+            Input::Changed(Err(error)) => viewer.show_error(&format!("watch failed: {error}")),
+            Input::Closed(error) => return Err(error),
         }
     }
 }

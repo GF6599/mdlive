@@ -1,14 +1,16 @@
 mod document;
 pub mod theme;
+mod watch;
 mod wrap;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::document::Document;
+pub use crate::watch::{FileWatch, watch_file};
 
 /// Beyond this width a line of prose gets too long to read, so wider screens centre the text.
 const MAX_TEXT_WIDTH: u16 = 100;
@@ -27,6 +29,7 @@ pub struct Viewer {
     width: Option<usize>,
     top: usize,
     page: usize,
+    error: Option<String>,
 }
 
 impl Viewer {
@@ -38,6 +41,7 @@ impl Viewer {
             width: None,
             top: 0,
             page: 0,
+            error: None,
         }
     }
 
@@ -68,11 +72,31 @@ impl Viewer {
         frame.render_widget(Paragraph::new(lines), text);
 
         frame.buffer_mut().set_style(status, theme::status());
-        frame.render_widget(Paragraph::new(format!(" {}", self.title)), status);
+        let mut left = vec![Span::raw(format!(" {}", self.title))];
+        if let Some(error) = &self.error {
+            left.push(Span::styled(format!("  {error}"), theme::error()));
+        }
+        frame.render_widget(Paragraph::new(Line::from(left)), status);
         frame.render_widget(
             Paragraph::new(format!("{}% ", self.percent())).right_aligned(),
             status,
         );
+    }
+
+    /// Shows new file contents, keeping the reader under the same heading.
+    pub fn reload(&mut self, markdown: &str) {
+        self.error = None;
+        self.markdown = markdown.to_string();
+        if let Some(width) = self.width {
+            let anchor = self.document.anchor(self.top);
+            self.document = Document::render(&self.markdown, width);
+            self.top = self.document.screen_line_at(&anchor);
+        }
+    }
+
+    /// Keeps the last good render on screen and names the failure in the status line.
+    pub fn show_error(&mut self, message: &str) {
+        self.error = Some(message.to_string());
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Flow {

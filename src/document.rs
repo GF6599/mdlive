@@ -19,6 +19,21 @@ pub struct Document {
     /// The source line each screen line came from. A blank line between blocks takes the
     /// source line of the block above it, so a position never anchors to a gap.
     sources: Vec<usize>,
+    headings: Vec<Heading>,
+}
+
+#[derive(Debug)]
+struct Heading {
+    line: usize,
+    text: String,
+}
+
+/// A place in a document that survives an edit: a heading and the lines below it, with the source
+/// line as the fallback when the heading is gone.
+#[derive(Debug)]
+pub struct Anchor {
+    heading: Option<(String, usize, usize)>,
+    source_line: usize,
 }
 
 impl Document {
@@ -44,6 +59,41 @@ impl Document {
             .or(self.sources.last())
             .copied()
             .unwrap_or(0)
+    }
+
+    /// Where the screen line `top` sits: under which heading, the how-manyth with that text, and
+    /// how far below it.
+    pub fn anchor(&self, top: usize) -> Anchor {
+        let heading = self
+            .headings
+            .iter()
+            .rposition(|heading| heading.line <= top)
+            .map(|index| {
+                let heading = &self.headings[index];
+                let occurrence = self.headings[..index]
+                    .iter()
+                    .filter(|earlier| earlier.text == heading.text)
+                    .count();
+                (heading.text.clone(), occurrence, top - heading.line)
+            });
+        Anchor {
+            heading,
+            source_line: self.source_line_at(top),
+        }
+    }
+
+    pub fn screen_line_at(&self, anchor: &Anchor) -> usize {
+        anchor
+            .heading
+            .as_ref()
+            .and_then(|(text, occurrence, offset)| {
+                self.headings
+                    .iter()
+                    .filter(|heading| heading.text == *text)
+                    .nth(*occurrence)
+                    .map(|heading| heading.line + offset)
+            })
+            .unwrap_or_else(|| self.screen_line_of(anchor.source_line))
     }
 
     /// The first screen line of the block that holds `source_line`.
@@ -321,6 +371,10 @@ impl Builder {
         match block {
             Block::Text { spans, .. } => self.push_wrapped(&spans, width, line),
             Block::Heading { spans, level } => {
+                self.document.headings.push(Heading {
+                    line: self.document.len(),
+                    text: spans.iter().map(|span| span.content.as_ref()).collect(),
+                });
                 self.push_wrapped(&spans, width, line);
                 if let Some((glyph, style)) = theme::heading_rule(level) {
                     self.push_line(vec![Span::styled(glyph.repeat(width), style)], false, line);

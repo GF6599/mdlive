@@ -340,3 +340,82 @@ fn shows_html_as_source_and_hides_comments() {
     assert_eq!(buffer[find(&buffer, "<summary>")].fg, theme::MUTED);
     assert_eq!(buffer[find(&buffer, "<kbd>")].fg, theme::MUTED);
 }
+
+const SECTIONS: &str = "intro\n\n## Notes\n\nfirst section\n\n## Notes\n\nline one\n\nline two\n\nline three\n\nline four\n";
+
+/// Scrolls `SECTIONS` so that "line two", five lines under the second Notes heading, is at the top.
+fn reading_line_two() -> Viewer {
+    let mut viewer = Viewer::new("doc.md", SECTIONS);
+    draw(&mut viewer, 30, 4);
+    for _ in 0..12 {
+        press(&mut viewer, KeyCode::Char('j'));
+    }
+    assert_eq!(body(&draw(&mut viewer, 30, 4))[0], " line two");
+    viewer
+}
+
+/// A reload keeps the reader in their section, even when the edit adds lines above it.
+///
+/// Why it matters: a save that throws the reader to another part of the page breaks the preview
+/// beside the editor, which saves often.
+#[test]
+fn keeps_the_section_across_a_reload_that_adds_lines_above() {
+    // Given: a reader five lines into the second of two sections that share a heading
+    let mut viewer = reading_line_two();
+
+    // When: the file is saved with two new paragraphs at the top and an edit below the reader
+    let edited = SECTIONS.replace("line three", "line three edited");
+    viewer.reload(&format!("new para\n\nanother\n\n{edited}"));
+
+    // Then: the edit shows, and the same line is still at the top, under the same heading
+    assert_eq!(
+        body(&draw(&mut viewer, 30, 4)),
+        [" line two", "", " line three edited"]
+    );
+}
+
+/// A reload whose edit removed the reader's heading keeps the same source line at the top.
+///
+/// Why it matters: with no heading to anchor to, the source line is the best guess left, and
+/// jumping to the top would lose the reader entirely.
+#[test]
+fn keeps_the_source_line_when_the_heading_is_gone() {
+    // Given: a reader five lines into the second Notes section
+    let mut viewer = reading_line_two();
+
+    // When: the file is saved with that heading renamed and an edit below the reader
+    let edited = SECTIONS
+        .replacen("## Notes\n\nline one", "## Usage\n\nline one", 1)
+        .replace("line three", "line three edited");
+    viewer.reload(&edited);
+
+    // Then: the edit shows, and the same line is still at the top
+    assert_eq!(
+        body(&draw(&mut viewer, 30, 4)),
+        [" line two", "", " line three edited"]
+    );
+}
+
+/// A file that cannot be read shows the error in the status line and keeps the last render.
+///
+/// Why it matters: an editor saves by replacing the file, and a reload that blanks the page in
+/// that moment makes the preview flicker or go empty.
+#[test]
+fn shows_a_read_error_and_keeps_the_last_render() {
+    // Given: a reader on line two
+    let mut viewer = reading_line_two();
+
+    // When: a reload fails
+    viewer.show_error("doc.md: No such file or directory");
+
+    // Then: the status line names the error, and the page stays as it was
+    let buffer = draw(&mut viewer, 60, 4);
+    assert!(status(&buffer).contains("No such file or directory"));
+    assert_eq!(body(&buffer)[0], " line two");
+
+    // When: the next reload succeeds
+    viewer.reload(SECTIONS);
+
+    // Then: the error is gone
+    assert!(!status(&draw(&mut viewer, 60, 4)).contains("No such file"));
+}

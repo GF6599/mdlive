@@ -7,6 +7,7 @@ description = "A terminal preview of a Markdown file that follows each save"
 
 [dependencies]
 crossterm = "0.29"
+notify-debouncer-mini = "0.7"
 pulldown-cmark = { version = "0.13", default-features = false }
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
 unicode-segmentation = "1"
@@ -25,3 +26,6 @@ missing_debug_implementations = "warn"
 unwrap_used = "warn"
 expect_used = "warn"
 panic = "warn"
+
+[dev-dependencies]
+tempfile = "3"

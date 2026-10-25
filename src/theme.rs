@@ -8,6 +8,7 @@ pub const OVERLAY: Color = Color::Rgb(0x26, 0x23, 0x3a);
 pub const MUTED: Color = Color::Rgb(0x6e, 0x6a, 0x86);
 pub const SUBTLE: Color = Color::Rgb(0x90, 0x8c, 0xaa);
 pub const TEXT: Color = Color::Rgb(0xe0, 0xde, 0xf4);
+pub const LOVE: Color = Color::Rgb(0xeb, 0x6f, 0x92);
 pub const ROSE: Color = Color::Rgb(0xeb, 0xbc, 0xba);
 pub const FOAM: Color = Color::Rgb(0x9c, 0xcf, 0xd8);
 pub const HL_MED: Color = Color::Rgb(0x40, 0x3d, 0x52);
@@ -18,6 +19,10 @@ pub fn page() -> Style {
 
 pub fn status() -> Style {
     Style::new().fg(SUBTLE).bg(SURFACE)
+}
+
+pub fn error() -> Style {
+    Style::new().fg(LOVE)
 }
 
 pub fn heading(level: u8) -> Style {
