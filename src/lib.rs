@@ -1,4 +1,5 @@
 mod contents;
+mod diagrams;
 mod document;
 mod folds;
 mod front_matter;
@@ -24,6 +25,7 @@ use ratatui::widgets::Paragraph;
 use ratatui_image::picker::Picker;
 use ratatui_image::sliced::SignedPosition;
 
+use crate::diagrams::Diagrams;
 use crate::document::Document;
 use crate::folds::Folds;
 pub use crate::hyperlink::{LinkArea, hyperlink_cells};
@@ -69,6 +71,7 @@ pub struct Viewer {
     notice: Option<(String, Style)>,
     links: Vec<LinkArea>,
     pictures: Pictures,
+    diagrams: Diagrams,
 }
 
 impl Viewer {
@@ -90,6 +93,7 @@ impl Viewer {
             notice: None,
             links: Vec::new(),
             pictures: Pictures::new(Path::new("."), Picker::halfblocks()),
+            diagrams: Diagrams::default(),
         }
     }
 
@@ -234,7 +238,14 @@ impl Viewer {
 
     /// Lays the page out at `width`, and lets go of the pictures it no longer shows at their size.
     fn render(&mut self, width: usize) {
-        self.document = Document::render(&self.markdown, width, &self.folds, &self.pictures);
+        self.document = Document::render(
+            &self.markdown,
+            width,
+            &self.folds,
+            &self.pictures,
+            &self.diagrams,
+        );
+        self.diagrams.forget_unused();
         let placed = self
             .document
             .pictures()

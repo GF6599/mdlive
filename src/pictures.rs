@@ -10,7 +10,7 @@ use ratatui::layout::{Rect, Size};
 use ratatui::style::Color;
 use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
-use ratatui_image::picker::Picker;
+use ratatui_image::picker::{Picker, ProtocolType};
 use ratatui_image::sliced::{SignedPosition, SlicedImage, SlicedProtocol};
 use resvg::tiny_skia::{Pixmap, Transform};
 use resvg::usvg;
@@ -20,9 +20,16 @@ use crate::theme;
 /// A picture sized to fit the text, in cells.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Placed {
-    pub path: PathBuf,
+    pub source: Source,
     pub columns: u16,
     pub rows: u16,
+}
+
+/// Where the pixels of a picture come from.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Source {
+    File(PathBuf),
+    Svg(Arc<str>),
 }
 
 /// Where the pictures of a page come from, and how the terminal draws them.
@@ -66,8 +73,8 @@ impl Pictures {
             .resolve(url)
             .ok_or_else(|| format!("not found: {url}"))?;
         let (pixels_wide, pixels_high) = if is_svg(&path) {
-            let size = read_svg(&path, &usvg::Options::default())?.size();
-            (size.width().ceil() as u32, size.height().ceil() as u32)
+            let data = std::fs::read(&path).map_err(|error| format!("cannot read: {error}"))?;
+            svg_size(&parse_svg(&data, &usvg::Options::default())?)
         } else {
             ImageReader::open(&path)
                 .and_then(ImageReader::with_guessed_format)
@@ -75,6 +82,23 @@ impl Pictures {
                 .and_then(|reader| reader.into_dimensions().map_err(|error| error.to_string()))
                 .map_err(|error| format!("cannot read: {error}"))?
         };
+        Ok(self.fit(Source::File(path), pixels_wide, pixels_high, width))
+    }
+
+    /// Sizes an SVG held in memory to fit `width` columns.
+    pub fn place_svg(&self, svg: Arc<str>, width: usize) -> Result<Placed, String> {
+        let (pixels_wide, pixels_high) =
+            svg_size(&parse_svg(svg.as_bytes(), &usvg::Options::default())?);
+        Ok(self.fit(Source::Svg(svg), pixels_wide, pixels_high, width))
+    }
+
+    /// Whether the terminal draws real pixels, rather than half blocks that blur small text.
+    pub fn has_graphics(&self) -> bool {
+        self.picker.protocol_type() != ProtocolType::Halfblocks
+    }
+
+    /// The cells a picture takes at its natural size, shrunk to `width` columns when it is wider.
+    fn fit(&self, source: Source, pixels_wide: u32, pixels_high: u32, width: usize) -> Placed {
         let font = self.picker.font_size();
         let (cell_wide, cell_high) = (u64::from(font.width.max(1)), u64::from(font.height.max(1)));
         let (wide, high) = (u64::from(pixels_wide.max(1)), u64::from(pixels_high.max(1)));
@@ -89,11 +113,11 @@ impl Pictures {
         let cells = |pixels: u64, cell: u64| {
             u16::try_from(pixels.div_ceil(cell).clamp(1, MAX_ROWS)).unwrap_or(1)
         };
-        Ok(Placed {
-            path,
+        Placed {
+            source,
             columns: cells(wide, cell_wide),
             rows: cells(high, cell_high),
-        })
+        }
     }
 
     /// The file a picture address names. A site-root address such as `/diagrams/a.svg` is found
@@ -178,14 +202,17 @@ fn load(picker: &Picker, placed: &Placed) -> Result<SlicedProtocol, String> {
     let font = picker.font_size();
     let wide = u32::from(placed.columns) * u32::from(font.width);
     let high = u32::from(placed.rows) * u32::from(font.height);
-    let image = if is_svg(&placed.path) {
-        draw_svg(&placed.path, wide, high)?
-    } else {
-        ImageReader::open(&placed.path)
+    let image = match &placed.source {
+        Source::Svg(svg) => draw_svg(svg.as_bytes(), None, wide, high)?,
+        Source::File(path) if is_svg(path) => {
+            let data = std::fs::read(path).map_err(|error| format!("cannot read: {error}"))?;
+            draw_svg(&data, path.parent(), wide, high)?
+        }
+        Source::File(path) => ImageReader::open(path)
             .and_then(ImageReader::with_guessed_format)
             .map_err(|error| error.to_string())
             .and_then(|reader| reader.decode().map_err(|error| error.to_string()))
-            .map_err(|error| format!("cannot read: {error}"))?
+            .map_err(|error| format!("cannot read: {error}"))?,
     };
     let image: DynamicImage = if image.width() > wide {
         image.resize(wide, high, FilterType::Triangle)
@@ -201,16 +228,23 @@ fn is_svg(path: &Path) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"))
 }
 
-fn read_svg(path: &Path, options: &usvg::Options) -> Result<usvg::Tree, String> {
-    std::fs::read(path)
-        .map_err(|error| error.to_string())
-        .and_then(|data| usvg::Tree::from_data(&data, options).map_err(|error| error.to_string()))
-        .map_err(|error| format!("cannot read: {error}"))
+fn parse_svg(data: &[u8], options: &usvg::Options) -> Result<usvg::Tree, String> {
+    usvg::Tree::from_data(data, options).map_err(|error| format!("cannot read: {error}"))
+}
+
+fn svg_size(tree: &usvg::Tree) -> (u32, u32) {
+    let size = tree.size();
+    (size.width().ceil() as u32, size.height().ceil() as u32)
 }
 
 /// Draws an SVG at the size it takes on screen, so it stays sharp at any width. Its labels need
 /// the system fonts, which take a moment to load, so they load once, on the first SVG drawn.
-fn draw_svg(path: &Path, wide: u32, high: u32) -> Result<DynamicImage, String> {
+fn draw_svg(
+    data: &[u8],
+    resources: Option<&Path>,
+    wide: u32,
+    high: u32,
+) -> Result<DynamicImage, String> {
     static FONTS: OnceLock<Arc<usvg::fontdb::Database>> = OnceLock::new();
     let fonts = FONTS.get_or_init(|| {
         let mut fonts = usvg::fontdb::Database::new();
@@ -218,11 +252,11 @@ fn draw_svg(path: &Path, wide: u32, high: u32) -> Result<DynamicImage, String> {
         Arc::new(fonts)
     });
     let options = usvg::Options {
-        resources_dir: path.parent().map(Path::to_path_buf),
+        resources_dir: resources.map(Path::to_path_buf),
         fontdb: Arc::clone(fonts),
         ..usvg::Options::default()
     };
-    let tree = read_svg(path, &options)?;
+    let tree = parse_svg(data, &options)?;
     let size = tree.size();
     let scale = (wide as f32 / size.width()).min(high as f32 / size.height());
     let (pixels_wide, pixels_high) = (

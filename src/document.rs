@@ -9,6 +9,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
+use crate::diagrams::{self, Diagrams};
 use crate::folds::{DetailsTag, Folds, details_tags};
 use crate::front_matter;
 use crate::highlight::highlight;
@@ -90,8 +91,14 @@ pub struct Anchor {
 }
 
 impl Document {
-    pub fn render(markdown: &str, width: usize, folds: &Folds, pictures: &Pictures) -> Self {
-        Builder::new(markdown, width.max(1), folds.clone(), pictures).build(markdown)
+    pub fn render(
+        markdown: &str,
+        width: usize,
+        folds: &Folds,
+        pictures: &Pictures,
+        diagrams: &Diagrams,
+    ) -> Self {
+        Builder::new(markdown, width.max(1), folds.clone(), pictures, diagrams).build(markdown)
     }
 
     pub fn pictures(&self) -> &[Picture] {
@@ -240,6 +247,7 @@ type Footnote = (String, Vec<(Event<'static>, Range<usize>)>);
 struct Builder<'a> {
     width: usize,
     pictures: &'a Pictures,
+    diagrams: &'a Diagrams,
     /// The address of the picture the parser is inside, and whether it opened its paragraph.
     image: Option<(String, bool)>,
     /// A picture that is the whole of its paragraph so far, with its alt text.
@@ -265,13 +273,20 @@ struct Builder<'a> {
 }
 
 impl<'a> Builder<'a> {
-    fn new(markdown: &str, width: usize, fold_states: Folds, pictures: &'a Pictures) -> Self {
+    fn new(
+        markdown: &str,
+        width: usize,
+        fold_states: Folds,
+        pictures: &'a Pictures,
+        diagrams: &'a Diagrams,
+    ) -> Self {
         let line_starts = std::iter::once(0)
             .chain(markdown.match_indices('\n').map(|(at, _)| at + 1))
             .collect();
         Self {
             width,
             pictures,
+            diagrams,
             image: None,
             lone_picture: None,
             line_starts,
@@ -706,6 +721,9 @@ impl<'a> Builder<'a> {
                     self.push_line(vec![Span::styled(glyph.repeat(width), style)], false, line);
                 }
             }
+            Block::Code { text, language } if language == "mermaid" => {
+                self.push_diagram(&text, width, line);
+            }
             Block::Code { text, language } => self.push_code(&text, &language, width, line),
             Block::Table { alignments, rows } => {
                 for (index, row) in table::lay_out(&rows, &alignments, width)
@@ -829,16 +847,7 @@ impl<'a> Builder<'a> {
     /// Reserves the rows of a picture, or shows its alt text and why it cannot be drawn.
     fn push_picture(&mut self, url: &str, alt: &str, base: Style, width: usize, line: usize) {
         match self.pictures.place(url, width) {
-            Ok(placed) => {
-                self.document.pictures.push(Picture {
-                    line: self.document.len(),
-                    column: self.containers.iter().map(container_width).sum(),
-                    placed: placed.clone(),
-                });
-                for row in 0..placed.rows {
-                    self.push_line(Vec::new(), row == 0, line);
-                }
-            }
+            Ok(placed) => self.push_placed(placed, line),
             Err(reason) => {
                 let runs = [
                     (Span::styled(PICTURE_MARKER, theme::marker()), None),
@@ -851,6 +860,49 @@ impl<'a> Builder<'a> {
                 self.push_wrapped(&runs, width, line);
             }
         }
+    }
+
+    fn push_placed(&mut self, placed: Placed, line: usize) {
+        let rows = placed.rows;
+        self.document.pictures.push(Picture {
+            line: self.document.len(),
+            column: self.containers.iter().map(container_width).sum(),
+            placed,
+        });
+        for row in 0..rows {
+            self.push_line(Vec::new(), row == 0, line);
+        }
+    }
+
+    /// Draws a Mermaid block as a picture where the terminal has graphics, and as box text where
+    /// half blocks would blur its labels. A block neither can draw keeps its source and the reason.
+    fn push_diagram(&mut self, source: &str, width: usize, line: usize) {
+        let failure = if self.pictures.has_graphics() {
+            match self
+                .diagrams
+                .svg(source)
+                .and_then(|svg| self.pictures.place_svg(svg, width))
+            {
+                Ok(placed) => return self.push_placed(placed, line),
+                Err(reason) => reason,
+            }
+        } else {
+            match diagrams::text(source, width) {
+                Ok(rows) => {
+                    for (index, row) in rows.into_iter().enumerate() {
+                        self.push_line(vec![Span::styled(row, theme::diagram())], index == 0, line);
+                    }
+                    return;
+                }
+                Err(reason) => reason,
+            }
+        };
+        self.push_code(source, "mermaid", width, line);
+        let note = [(
+            Span::styled(format!("(diagram: {failure})"), theme::picture_note()),
+            None,
+        )];
+        self.push_wrapped(&note, width, line);
     }
 
     /// Adds a line and notes where the text of each link sits on it.

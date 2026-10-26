@@ -56,6 +56,18 @@ pub fn marker() -> Style {
     Style::new().fg(ROSE)
 }
 
+pub fn diagram() -> Style {
+    Style::new().fg(SUBTLE)
+}
+
+/// A colour as `#rrggbb`, for renderers that take CSS colours.
+pub fn hex(color: Color) -> String {
+    match color {
+        Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+        _ => String::from("#000000"),
+    }
+}
+
 pub fn picture_note() -> Style {
     Style::new().fg(MUTED)
 }
