@@ -8,6 +8,7 @@ use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
 use crate::highlight::highlight;
+use crate::math::to_unicode;
 use crate::table::{self, Cell};
 use crate::theme;
 use crate::wrap::{BREAK, hard_wrap, wrap};
@@ -217,9 +218,22 @@ impl Builder {
             | Options::ENABLE_TABLES
             | Options::ENABLE_TASKLISTS
             | Options::ENABLE_FOOTNOTES
-            | Options::ENABLE_GFM;
+            | Options::ENABLE_GFM
+            | Options::ENABLE_MATH;
         let mut footnote: Option<Footnote> = None;
         for (event, range) in Parser::new_ext(markdown, options).into_offset_iter() {
+            let event = match event {
+                // pulldown-cmark closes a formula at a dollar sign before a digit, which reads two
+                // prices in a sentence as math. VS Code's preview refuses that close, and so do we.
+                Event::InlineMath(_) if closes_before_digit(markdown, &range) => {
+                    Event::Text(markdown[range.clone()].to_string().into())
+                }
+                // Cost ratings such as $$$$ parse as an empty formula.
+                Event::InlineMath(latex) | Event::DisplayMath(latex) if latex.trim().is_empty() => {
+                    Event::Text(markdown[range.clone()].to_string().into())
+                }
+                event => event,
+            };
             match (event, &mut footnote) {
                 (Event::Start(Tag::FootnoteDefinition(label)), _) => {
                     footnote = Some((label.to_string(), Vec::new()));
@@ -311,6 +325,18 @@ impl Builder {
                     *marker = (if done { DONE_TASK } else { OPEN_TASK }).to_string();
                 }
             }
+            Event::InlineMath(latex) => {
+                self.inline(&to_unicode(&latex), range, theme::math());
+            }
+            Event::DisplayMath(latex)
+                if matches!(
+                    self.block,
+                    Some((Block::Table { .. } | Block::Heading { .. }, _))
+                ) =>
+            {
+                self.inline(&to_unicode(&latex), range, theme::math());
+            }
+            Event::DisplayMath(latex) => self.push_display_math(&latex, range.start),
             Event::FootnoteReference(label) => {
                 let number = self.footnote_number(&label);
                 self.inline(&superscript(number), range, theme::link());
@@ -563,6 +589,35 @@ impl Builder {
         }
     }
 
+    /// A display formula breaks out of its paragraph onto centred lines of its own, and the text
+    /// after it continues as a new block.
+    fn push_display_math(&mut self, latex: &str, offset: usize) {
+        if let Some((Block::Text { spans, .. }, _)) = &self.block
+            && spans.is_empty()
+        {
+            self.block = None;
+        }
+        if self.block.is_some() {
+            self.finish_block();
+            self.gap = true;
+        }
+        self.blank_before_block();
+        let width = self.content_width();
+        let line = self.source_line(offset);
+        let text = to_unicode(latex);
+        let mut first = true;
+        for row in text.lines() {
+            for part in wrap(&[Span::styled(row.to_string(), theme::math())], width) {
+                let used: usize = part.iter().map(|span| span.content.width()).sum();
+                let mut centred = vec![Span::raw(" ".repeat(width.saturating_sub(used) / 2))];
+                centred.extend(part);
+                self.push_line(centred, first, line);
+                first = false;
+            }
+        }
+        self.gap = true;
+    }
+
     fn push_wrapped(&mut self, spans: &[Span<'static>], width: usize, line: usize) {
         for (index, row) in wrap(spans, width).into_iter().enumerate() {
             self.push_line(row, index == 0, line);
@@ -668,6 +723,10 @@ fn superscript(number: usize) -> String {
         .filter_map(|digit| digit.to_digit(10))
         .map(|digit| SUPERSCRIPT_DIGITS[digit as usize])
         .collect()
+}
+
+fn closes_before_digit(markdown: &str, range: &Range<usize>) -> bool {
+    markdown[range.end..].starts_with(|c: char| c.is_ascii_digit())
 }
 
 /// The language of a fence's info string, such as `rust` in `rust,ignore` or `ts title="x"`.

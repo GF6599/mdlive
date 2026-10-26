@@ -94,6 +94,10 @@ pub fn link() -> Style {
     Style::new().fg(FOAM)
 }
 
+pub fn math() -> Style {
+    Style::new().fg(IRIS)
+}
+
 pub fn inline_code() -> Style {
     Style::new().fg(ROSE).bg(OVERLAY)
 }

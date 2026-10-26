@@ -824,6 +824,101 @@ fn searches_the_rendered_text_with_smartcase_and_marks_every_match() {
     assert_eq!(buffer[(6, 2)].bg, theme::GOLD);
 }
 
+/// Inline math shows as Unicode text in the math colour, inside the sentence around it.
+///
+/// Why it matters: LaTeX source in a sentence reads as noise, and a reader of a formula page needs
+/// the symbols, not the commands that name them.
+#[test]
+fn renders_inline_math_as_unicode_text() {
+    // Given: a sentence with two inline formulas
+    let markdown = "Energy $E = mc^2$ and $\\alpha_i$ here.\n";
+
+    // When: it is drawn
+    let buffer = draw(&mut Viewer::new("doc.md", markdown), 40, 3);
+
+    // Then: the formulas read as symbols, in the math colour, and the words stay plain
+    assert_eq!(body(&buffer)[0], " Energy E = mc² and αᵢ here.");
+    assert_eq!(buffer[find(&buffer, "mc²")].fg, theme::IRIS);
+    assert_eq!(buffer[find(&buffer, "here")].fg, theme::TEXT);
+}
+
+/// Display math sits centred on its own lines, also when it is written inside a paragraph.
+///
+/// Why it matters: a display formula is set apart on a rendered page, and run into the text it
+/// reads as part of the sentence.
+#[test]
+fn centres_display_math_on_its_own_lines() {
+    // Given: a display formula as its own paragraph, and one inside a sentence
+    let markdown = "Before\n\n$$\\sqrt{\\sum_{i=1}^n x_i^2}$$\n\nMix $$x^2$$ end\n";
+
+    // When: it is drawn with 28 columns for text
+    let screen = shown(markdown, 30, 10);
+
+    // Then: each formula is centred in the 28 columns, with a blank line around it
+    assert_eq!(
+        screen,
+        [
+            " Before",
+            "",
+            "         √(∑ᵢ₌₁ⁿ xᵢ²)",
+            "",
+            " Mix",
+            "",
+            "              x²",
+            "",
+            " end",
+        ]
+    );
+}
+
+/// A command the converter does not know stays as source, and dollar amounts stay as text.
+///
+/// Why it matters: a formula that loses an unknown command shows a wrong equation without a sign,
+/// and prices read as math would garble a plain sentence.
+#[test]
+fn keeps_unknown_commands_and_leaves_dollar_amounts_alone() {
+    // Given: a formula with a made-up command, and a sentence with two prices
+    let markdown = "Odd $\\nosuchcommand + 1$ here.\n\nIt costs $5 and $10 today.\n\nRe-reads cost $3.93 in all ($0.31 each).\n";
+
+    // When: it is drawn
+    let screen = shown(markdown, 50, 7);
+
+    // Then: the command shows as written, and the prices read as plain text, also where a dollar
+    // sign before a digit could close a formula, which VS Code's preview does not allow either
+    assert!(screen[0].contains("\\nosuchcommand"));
+    assert_eq!(screen[2], " It costs $5 and $10 today.");
+    assert_eq!(screen[4], " Re-reads cost $3.93 in all ($0.31 each).");
+}
+
+/// Dollar ratings in a table and display math in a heading stay inside their block.
+///
+/// Why it matters: pages rate cost as $$$$ in table cells, and reading that as an empty formula
+/// breaks the table apart and scatters its cells as loose text.
+#[test]
+fn keeps_dollar_ratings_in_tables_and_math_in_headings() {
+    // Given: a table with dollar ratings, and a heading with a display formula
+    let markdown = "| Tier | Cost |\n|---|---|\n| Pilot | $$ |\n| Active | $$$$ |\n| Eq | $$y_1$$ |\n\n## Fit $$x^2$$ here\n";
+
+    // When: it is drawn
+    let screen = shown(markdown, 40, 10);
+
+    // Then: the table keeps every row with its ratings, and the heading stays one line
+    assert_eq!(
+        screen[..8],
+        [
+            " ┌────────┬──────┐",
+            " │ Tier   │ Cost │",
+            " ├────────┼──────┤",
+            " │ Pilot  │ $$   │",
+            " │ Active │ $$$$ │",
+            " │ Eq     │ y₁   │",
+            " └────────┴──────┘",
+            "",
+        ]
+    );
+    assert_eq!(screen[8], " Fit x² here");
+}
+
 /// The quit keys end the viewer, and other keys keep it open.
 ///
 /// Why it matters: a viewer that ignores q traps the reader in the terminal.

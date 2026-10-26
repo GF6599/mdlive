@@ -2,6 +2,7 @@ mod contents;
 mod document;
 mod highlight;
 mod keys;
+mod math;
 mod search;
 mod table;
 pub mod theme;
