@@ -56,6 +56,10 @@ pub fn marker() -> Style {
     Style::new().fg(ROSE)
 }
 
+pub fn picture_note() -> Style {
+    Style::new().fg(MUTED)
+}
+
 pub fn alert(kind: BlockQuoteKind) -> Style {
     Style::new().fg(match kind {
         BlockQuoteKind::Note => FOAM,

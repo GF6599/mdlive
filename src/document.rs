@@ -14,6 +14,7 @@ use crate::front_matter;
 use crate::highlight::highlight;
 use crate::hyperlink::is_openable;
 use crate::math::to_unicode;
+use crate::pictures::{Pictures, Placed};
 use crate::table::{self, Cell};
 use crate::theme;
 use crate::wrap::{BREAK, Run, hard_wrap, wrap, wrap_runs};
@@ -25,6 +26,7 @@ const OPEN_TASK: &str = "☐ ";
 const DONE_TASK: &str = "☑ ";
 const FOLD_CLOSED: &str = "▸ ";
 const FOLD_OPEN: &str = "▾ ";
+const PICTURE_MARKER: &str = "▣ ";
 const SUPERSCRIPT_DIGITS: [char; 10] = ['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'];
 
 /// A Markdown source laid out for one text width.
@@ -41,6 +43,15 @@ pub struct Document {
     folds: Vec<Fold>,
     links: Vec<Link>,
     urls: Vec<String>,
+    pictures: Vec<Picture>,
+}
+
+/// A picture on the page, in rows of its own from `line`.
+#[derive(Debug)]
+pub struct Picture {
+    pub line: usize,
+    pub column: usize,
+    pub placed: Placed,
 }
 
 /// The text of one link on one screen line.
@@ -79,8 +90,12 @@ pub struct Anchor {
 }
 
 impl Document {
-    pub fn render(markdown: &str, width: usize, folds: &Folds) -> Self {
-        Builder::new(markdown, width.max(1), folds.clone()).build(markdown)
+    pub fn render(markdown: &str, width: usize, folds: &Folds, pictures: &Pictures) -> Self {
+        Builder::new(markdown, width.max(1), folds.clone(), pictures).build(markdown)
+    }
+
+    pub fn pictures(&self) -> &[Picture] {
+        &self.pictures
     }
 
     pub fn folds(&self) -> &[Fold] {
@@ -222,8 +237,13 @@ enum Block {
 
 type Footnote = (String, Vec<(Event<'static>, Range<usize>)>);
 
-struct Builder {
+struct Builder<'a> {
     width: usize,
+    pictures: &'a Pictures,
+    /// The address of the picture the parser is inside, and whether it opened its paragraph.
+    image: Option<(String, bool)>,
+    /// A picture that is the whole of its paragraph so far, with its alt text.
+    lone_picture: Option<(String, String)>,
     line_starts: Vec<usize>,
     document: Document,
     containers: Vec<Container>,
@@ -244,13 +264,16 @@ struct Builder {
     summaries_seen: HashMap<String, usize>,
 }
 
-impl Builder {
-    fn new(markdown: &str, width: usize, fold_states: Folds) -> Self {
+impl<'a> Builder<'a> {
+    fn new(markdown: &str, width: usize, fold_states: Folds, pictures: &'a Pictures) -> Self {
         let line_starts = std::iter::once(0)
             .chain(markdown.match_indices('\n').map(|(at, _)| at + 1))
             .collect();
         Self {
             width,
+            pictures,
+            image: None,
+            lone_picture: None,
             line_starts,
             document: Document::default(),
             containers: Vec::new(),
@@ -501,6 +524,14 @@ impl Builder {
             Tag::Emphasis => self.styles.push(theme::emphasis()),
             Tag::Strong => self.styles.push(theme::strong()),
             Tag::Strikethrough => self.styles.push(theme::strikethrough()),
+            Tag::Image { dest_url, .. } => {
+                let opens_paragraph = match &self.block {
+                    None => true,
+                    Some((Block::Text { spans, .. }, _)) => spans.is_empty(),
+                    Some(_) => false,
+                };
+                self.image = Some((dest_url.to_string(), opens_paragraph));
+            }
             Tag::Link { dest_url, .. } => {
                 self.styles.push(theme::link());
                 self.link = is_openable(&dest_url).then(|| {
@@ -546,6 +577,17 @@ impl Builder {
                 self.styles.pop();
                 self.link = None;
             }
+            TagEnd::Image => {
+                if let Some((url, true)) = self.image.take()
+                    && let Some((Block::Text { spans, .. }, _)) = &self.block
+                {
+                    let alt = spans
+                        .iter()
+                        .map(|(span, _)| span.content.as_ref())
+                        .collect();
+                    self.lone_picture = Some((url, alt));
+                }
+            }
             _ => {}
         }
     }
@@ -586,6 +628,9 @@ impl Builder {
 
     /// Adds inline text, opening a paragraph for the text of a tight list item.
     fn inline(&mut self, text: &str, range: Range<usize>, style: Style) {
+        if self.image.is_none() {
+            self.lone_picture = None;
+        }
         if self.block.is_none() {
             self.open(
                 Block::Text {
@@ -622,6 +667,7 @@ impl Builder {
     }
 
     fn finish_block(&mut self) {
+        let lone_picture = self.lone_picture.take();
         let Some((block, line)) = self.block.take() else {
             return;
         };
@@ -642,6 +688,9 @@ impl Builder {
         self.blank_before_block();
         let width = self.content_width();
         match block {
+            Block::Text { base, .. } if let Some((url, alt)) = lone_picture => {
+                self.push_picture(&url, &alt, base, width, line);
+            }
             Block::Text { spans, .. } => self.push_wrapped(&spans, width, line),
             Block::Heading { spans, level } => {
                 self.document.headings.push(Heading {
@@ -774,6 +823,33 @@ impl Builder {
     fn push_wrapped(&mut self, runs: &[Run], width: usize, line: usize) {
         for (index, row) in wrap_runs(runs, width).into_iter().enumerate() {
             self.push_runs(row, index == 0, line);
+        }
+    }
+
+    /// Reserves the rows of a picture, or shows its alt text and why it cannot be drawn.
+    fn push_picture(&mut self, url: &str, alt: &str, base: Style, width: usize, line: usize) {
+        match self.pictures.place(url, width) {
+            Ok(placed) => {
+                self.document.pictures.push(Picture {
+                    line: self.document.len(),
+                    column: self.containers.iter().map(container_width).sum(),
+                    placed: placed.clone(),
+                });
+                for row in 0..placed.rows {
+                    self.push_line(Vec::new(), row == 0, line);
+                }
+            }
+            Err(reason) => {
+                let runs = [
+                    (Span::styled(PICTURE_MARKER, theme::marker()), None),
+                    (Span::styled(alt.to_string(), base), None),
+                    (
+                        Span::styled(format!(" ({reason})"), theme::picture_note()),
+                        None,
+                    ),
+                ];
+                self.push_wrapped(&runs, width, line);
+            }
         }
     }
 

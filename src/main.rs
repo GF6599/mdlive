@@ -6,6 +6,7 @@ use std::time::Duration;
 use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
 use mdlive::{Flow, LinkArea, Viewer, hyperlink_cells, watch_file};
 use ratatui::backend::Backend;
+use ratatui_image::picker::Picker;
 
 /// Long enough to fold the writes of one editor save into one reload, short enough to feel live.
 const DEBOUNCE: Duration = Duration::from_millis(100);
@@ -46,15 +47,17 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    std::thread::spawn(move || read_terminal(&sender));
+    let base = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
 
     let mut terminal = ratatui::init();
-    let result = run(
-        &mut terminal,
-        Viewer::new(&title, &markdown),
-        &path,
-        &inputs,
-    );
+    // The query reads the terminal's answer from stdin, so it runs before the key reader starts.
+    let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
+    std::thread::spawn(move || read_terminal(&sender));
+    let viewer = Viewer::new(&title, &markdown).with_images(base, picker);
+    let result = run(&mut terminal, viewer, &path, &inputs);
     ratatui::restore();
     match result {
         Ok(()) => ExitCode::SUCCESS,

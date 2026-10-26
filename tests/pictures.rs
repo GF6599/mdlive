@@ -1,0 +1,181 @@
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
+use std::path::Path;
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use image::{Rgb, RgbImage};
+use mdlive::{Viewer, theme};
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
+use ratatui::buffer::Buffer;
+use ratatui::style::Color;
+use ratatui_image::picker::Picker;
+use unicode_width::UnicodeWidthStr;
+
+const RED: Rgb<u8> = Rgb([255, 0, 0]);
+const BLUE: Rgb<u8> = Rgb([0, 0, 255]);
+
+/// Writes a picture whose top `split` rows are `top` and the rest `bottom`.
+fn picture(path: &Path, width: u32, height: u32, split: u32, top: Rgb<u8>, bottom: Rgb<u8>) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    RgbImage::from_fn(width, height, |_, y| if y < split { top } else { bottom })
+        .save(path)
+        .unwrap();
+}
+
+/// A viewer for a page in `dir`, drawing pictures in half blocks on 10 by 20 pixel cells.
+fn viewer(dir: &Path, markdown: &str) -> Viewer {
+    Viewer::new("doc.md", markdown).with_images(dir, Picker::halfblocks())
+}
+
+fn draw(viewer: &mut Viewer, width: u16, height: u16) -> Buffer {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|frame| viewer.draw(frame)).unwrap();
+    terminal.backend().buffer().clone()
+}
+
+fn row(buffer: &Buffer, y: u16) -> String {
+    let mut text = String::new();
+    let mut x = 0;
+    while x < buffer.area.width {
+        let symbol = buffer[(x, y)].symbol();
+        text.push_str(symbol);
+        x += u16::try_from(symbol.width().max(1)).unwrap();
+    }
+    text.trim_end().to_string()
+}
+
+/// The columns of row `y` whose lower half is painted `colour`.
+fn painted(buffer: &Buffer, y: u16, colour: Rgb<u8>) -> Vec<u16> {
+    let [r, g, b] = colour.0;
+    (0..buffer.area.width)
+        .filter(|&x| buffer[(x, y)].bg == Color::Rgb(r, g, b))
+        .collect()
+}
+
+/// A picture beside the page is drawn at its own size, in the rows it takes in the text.
+///
+/// Why it matters: the path is relative to the Markdown file, not to where the viewer started,
+/// and a picture drawn over the text after it hides that text.
+#[test]
+fn draws_a_local_picture_at_its_size_between_the_blocks() {
+    // Given: a 100 by 40 pixel picture in a folder beside the page
+    let dir = tempfile::tempdir().unwrap();
+    picture(&dir.path().join("pics/red.png"), 100, 40, 40, RED, RED);
+    let markdown = "before\n\n![red](pics/red.png)\n\nafter\n";
+
+    // When: the page is drawn
+    let buffer = draw(&mut viewer(dir.path(), markdown), 40, 8);
+
+    // Then: the picture takes 10 columns and 2 rows, with the text around it in place
+    assert_eq!(row(&buffer, 0), " before");
+    assert_eq!(painted(&buffer, 2, RED), (1..11).collect::<Vec<_>>());
+    assert_eq!(painted(&buffer, 3, RED), (1..11).collect::<Vec<_>>());
+    assert_eq!(row(&buffer, 4), "");
+    assert_eq!(row(&buffer, 5), " after");
+}
+
+/// A picture wider than the text shrinks to the text width and keeps its shape, and a picture in
+/// a list sits after the bullet.
+///
+/// Why it matters: a picture wider than the screen would be cut off, and one drawn over the
+/// bullet hides which item it belongs to.
+#[test]
+fn fits_a_wide_picture_to_the_text_and_a_list_picture_after_its_bullet() {
+    // Given: a 2000 by 400 pixel picture, and a 20 by 20 one in a list item
+    let dir = tempfile::tempdir().unwrap();
+    picture(&dir.path().join("wide.png"), 2000, 400, 400, BLUE, BLUE);
+    picture(&dir.path().join("dot.png"), 20, 20, 20, RED, RED);
+    let markdown = "![wide](wide.png)\n\n- ![dot](dot.png)\n";
+
+    // When: the page is drawn 40 columns wide, which leaves 38 for the text
+    let buffer = draw(&mut viewer(dir.path(), markdown), 40, 8);
+
+    // Then: the wide picture fills the 38 columns, and its height shrinks by the same scale
+    for y in 0..4 {
+        assert_eq!(painted(&buffer, y, BLUE), (1..39).collect::<Vec<_>>());
+    }
+    assert_eq!(painted(&buffer, 4, BLUE), Vec::<u16>::new());
+    // And: the dot follows the bullet
+    assert!(row(&buffer, 5).starts_with(" •"));
+    assert_eq!(painted(&buffer, 5, RED), [3, 4]);
+}
+
+/// A picture scrolled partly past the top shows its lower part.
+///
+/// Why it matters: showing the top part instead would draw the wrong rows of the picture beside
+/// the text, and the picture would seem to slide over the page as the reader scrolls.
+#[test]
+fn shows_the_lower_part_of_a_picture_scrolled_past_the_top() {
+    // Given: a picture 4 rows tall, red in the top half and blue in the bottom half
+    let dir = tempfile::tempdir().unwrap();
+    picture(&dir.path().join("tall.png"), 10, 80, 40, RED, BLUE);
+    let mut viewer = viewer(dir.path(), "![tall](tall.png)\n\nafter\n\nmore\n\nend\n");
+    draw(&mut viewer, 40, 6);
+
+    // When: the reader scrolls three lines down
+    for _ in 0..3 {
+        viewer.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+    }
+    let buffer = draw(&mut viewer, 40, 6);
+
+    // Then: the first row shows the last row of the picture
+    assert_eq!(painted(&buffer, 0, BLUE), [1]);
+    assert_eq!(row(&buffer, 2), " after");
+}
+
+/// A picture that cannot be shown leaves its alt text and the reason, and a picture inside a line
+/// of text reads as its alt text.
+///
+/// Why it matters: a page must never make a network call when it opens, and a reader who sees
+/// nothing where a picture should be cannot tell a typo in the path from a broken file.
+#[test]
+fn shows_the_alt_text_and_the_reason_for_a_picture_it_cannot_draw() {
+    // Given: a remote picture, a missing one, a file that is not a picture, and one in a sentence
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("bad.png"), "not a picture").unwrap();
+    picture(&dir.path().join("red.png"), 10, 20, 20, RED, RED);
+    let markdown = "![Remote](https://example.com/a.png)\n\n![Missing](nope.png)\n\n\
+                    ![Broken](bad.png)\n\nsee ![icon](red.png) here\n\n![icon](red.png) first\n\nlast ![icon](red.png)\n";
+
+    // When: the page is drawn
+    let buffer = draw(&mut viewer(dir.path(), markdown), 60, 16);
+
+    // Then: each picture that cannot be drawn shows its alt text and the reason in the muted colour
+    assert_eq!(row(&buffer, 0), " ▣ Remote (remote image, not fetched)");
+    assert_eq!(row(&buffer, 2), " ▣ Missing (not found: nope.png)");
+    assert!(
+        row(&buffer, 4).starts_with(" ▣ Broken (cannot read: "),
+        "{}",
+        row(&buffer, 4)
+    );
+    assert_eq!(buffer[(10, 0)].fg, theme::MUTED);
+    // And: a picture in a sentence reads as its alt text, at either end of the sentence too
+    for sentence in [" see icon here", " icon first", " last icon"] {
+        let y = (0..buffer.area.height)
+            .find(|&y| row(&buffer, y) == sentence)
+            .unwrap_or_else(|| panic!("{sentence:?} is not on screen"));
+        assert_eq!(painted(&buffer, y, RED), Vec::<u16>::new());
+    }
+}
+
+/// A picture under the contents panel is not drawn.
+///
+/// Why it matters: a graphics protocol draws the picture over the text cells, so on a narrow
+/// screen it would cover the contents panel the reader just opened.
+#[test]
+fn leaves_out_a_picture_under_the_contents_panel() {
+    // Given: a picture on a narrow screen, and the contents open over the page
+    let dir = tempfile::tempdir().unwrap();
+    picture(&dir.path().join("wide.png"), 500, 40, 40, RED, RED);
+    let mut viewer = viewer(dir.path(), "# Title\n\n![wide](wide.png)\n");
+    viewer.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+
+    // When: the page is drawn 60 columns wide
+    let buffer = draw(&mut viewer, 60, 8);
+
+    // Then: no part of the picture shows beside the panel
+    for y in 0..7 {
+        assert_eq!(painted(&buffer, y, RED), Vec::<u16>::new());
+    }
+}

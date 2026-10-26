@@ -6,11 +6,14 @@ mod highlight;
 mod hyperlink;
 mod keys;
 mod math;
+mod pictures;
 mod search;
 mod table;
 pub mod theme;
 mod watch;
 mod wrap;
+
+use std::path::Path;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
@@ -18,11 +21,14 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use ratatui_image::picker::Picker;
+use ratatui_image::sliced::SignedPosition;
 
 use crate::document::Document;
 use crate::folds::Folds;
 pub use crate::hyperlink::{LinkArea, hyperlink_cells};
 use crate::keys::{Command, KeyReader};
+use crate::pictures::Pictures;
 use crate::search::{Match, find_all};
 pub use crate::watch::{FileWatch, watch_file};
 
@@ -62,6 +68,7 @@ pub struct Viewer {
     /// A note on the last search, such as a wrap at the end of the page.
     notice: Option<(String, Style)>,
     links: Vec<LinkArea>,
+    pictures: Pictures,
 }
 
 impl Viewer {
@@ -82,7 +89,16 @@ impl Viewer {
             current_match: None,
             notice: None,
             links: Vec::new(),
+            pictures: Pictures::new(Path::new("."), Picker::halfblocks()),
         }
+    }
+
+    /// Reads pictures at relative paths from `base`, the folder of the Markdown file, and draws
+    /// them the way `picker` found the terminal can.
+    #[must_use]
+    pub fn with_images(mut self, base: &Path, picker: Picker) -> Self {
+        self.pictures = Pictures::new(base, picker);
+        self
     }
 
     pub fn draw(&mut self, frame: &mut Frame) {
@@ -124,6 +140,7 @@ impl Viewer {
         frame.render_widget(Paragraph::new(lines), text);
         self.mark_matches(frame, text);
         self.links = self.links_on_screen(text, panel);
+        self.draw_pictures(frame, text, panel);
         if let Some(panel) = panel {
             let current = self.document.heading_at(self.top);
             contents::draw(frame, panel, self.document.headings(), current);
@@ -148,6 +165,31 @@ impl Viewer {
             Paragraph::new(format!("{pending}{gap}{}% ", self.percent())).right_aligned(),
             status,
         );
+    }
+
+    /// Draws the pictures in view, each from its first row, which may be above the page. A picture
+    /// under the contents panel is left out, because a graphics protocol draws over the panel.
+    fn draw_pictures(&mut self, frame: &mut Frame, text: Rect, panel: Option<Rect>) {
+        let bottom = self.top + usize::from(text.height);
+        for picture in self.document.pictures() {
+            let end = picture.line + usize::from(picture.placed.rows);
+            if end <= self.top || picture.line >= bottom {
+                continue;
+            }
+            let Ok(column) = u16::try_from(picture.column) else {
+                continue;
+            };
+            if panel.is_some_and(|panel| panel.right() > text.x.saturating_add(column)) {
+                continue;
+            }
+            let offset = picture.line.abs_diff(self.top);
+            let (Ok(x), Ok(y)) = (i16::try_from(column), i16::try_from(offset)) else {
+                continue;
+            };
+            let y = if picture.line < self.top { -y } else { y };
+            self.pictures
+                .draw(frame, &picture.placed, text, SignedPosition { x, y });
+        }
     }
 
     /// The links drawn in the last frame, for the terminal to open on a click.
@@ -190,11 +232,22 @@ impl Viewer {
         self.render_in_place();
     }
 
+    /// Lays the page out at `width`, and lets go of the pictures it no longer shows at their size.
+    fn render(&mut self, width: usize) {
+        self.document = Document::render(&self.markdown, width, &self.folds, &self.pictures);
+        let placed = self
+            .document
+            .pictures()
+            .iter()
+            .map(|picture| &picture.placed);
+        self.pictures.keep_only(placed);
+    }
+
     /// Renders the page again, keeping the reader under the same heading.
     fn render_in_place(&mut self) {
         if let Some(width) = self.width {
             let anchor = self.document.anchor(self.top);
-            self.document = Document::render(&self.markdown, width, &self.folds);
+            self.render(width);
             self.current_match = None;
             self.top = self.document.screen_line_at(&anchor);
         }
@@ -420,7 +473,7 @@ impl Viewer {
             return;
         }
         let anchor = self.document.source_line_at(self.top);
-        self.document = Document::render(&self.markdown, width, &self.folds);
+        self.render(width);
         self.current_match = None;
         if self.width.is_some() {
             self.top = self.document.screen_line_of(anchor);
