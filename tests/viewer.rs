@@ -623,6 +623,40 @@ fn covers_the_page_on_a_narrow_screen() {
     assert_eq!(columns(&buffer, 30, 60), before);
 }
 
+/// The contents opens at start on a page with 3 or more headings when the screen holds it beside a
+/// full-width page, and a resize never opens it after that.
+///
+/// Why it matters: a reader who does not know t never finds the contents, but a panel that opens on
+/// a narrow screen squeezes the text, and one that reopens on a resize undoes the reader's choice.
+#[test]
+fn opens_the_contents_at_start_when_it_fits_beside_the_page() {
+    let three = "# One\n\ntext\n\n## Two\n\ntext\n\n## Three\n\ntext\n";
+    let has_panel = |buffer: &Buffer| columns(buffer, 0, 30)[0].starts_with("┌ Contents ");
+
+    // Given: three headings on a screen of 132 columns, the panel and a full-width page
+    let mut viewer = Viewer::new("doc.md", three);
+    // Then: the first draw shows the contents
+    assert!(has_panel(&draw(&mut viewer, 132, 8)));
+
+    // When: the reader presses t, then the screen grows
+    type_keys(&mut viewer, "t");
+    // Then: the contents stays closed
+    assert!(!has_panel(&draw(&mut viewer, 160, 8)));
+
+    // Given: the same page on a screen one column narrower
+    let mut narrow = Viewer::new("doc.md", three);
+    // Then: the contents starts closed
+    assert!(!has_panel(&draw(&mut narrow, 131, 8)));
+    // When: the screen grows past the width
+    // Then: the contents stays closed, because the choice is made at start
+    assert!(!has_panel(&draw(&mut narrow, 160, 8)));
+
+    // Given: two headings on the wide screen
+    let mut short = Viewer::new("doc.md", "# One\n\ntext\n\n## Two\n\ntext\n");
+    // Then: the contents starts closed
+    assert!(!has_panel(&draw(&mut short, 132, 8)));
+}
+
 /// With the contents open, each entry's hint letter puts its heading at the top.
 ///
 /// Why it matters: the hint is the one-key way to reach any section, so a hint that lands on the

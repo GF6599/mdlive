@@ -38,6 +38,8 @@ pub use crate::watch::{FileWatch, watch_file};
 const MAX_TEXT_WIDTH: u16 = 100;
 /// Below this width the text wraps every few words, so the contents covers the page instead.
 const MIN_TEXT_BESIDE_CONTENTS: u16 = 40;
+/// A page with fewer headings than this reads fine without the contents, so it starts closed.
+const MIN_HEADINGS_TO_OPEN_CONTENTS: usize = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flow {
@@ -61,7 +63,8 @@ pub struct Viewer {
     page: usize,
     error: Option<String>,
     keys: KeyReader,
-    contents_open: bool,
+    /// `None` until the first draw decides from the screen width, or the reader presses t.
+    contents_open: Option<bool>,
     folds: Folds,
     /// The search being typed in the status line.
     prompt: Option<Search>,
@@ -85,7 +88,7 @@ impl Viewer {
             page: 0,
             error: None,
             keys: KeyReader::default(),
-            contents_open: false,
+            contents_open: None,
             folds: Folds::default(),
             prompt: None,
             search: None,
@@ -111,7 +114,10 @@ impl Viewer {
         let [body, status] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
 
-        let panel = self.contents_open.then(|| Rect {
+        if self.contents_open.is_none() {
+            self.contents_open = Some(self.contents_fit_at_start(body.width));
+        }
+        let panel = self.contents_is_open().then(|| Rect {
             width: contents::WIDTH.min(body.width),
             ..body
         });
@@ -276,7 +282,7 @@ impl Viewer {
         }
         self.notice = None;
         let half_page = (self.page / 2).max(1);
-        self.keys.hint_targets = if self.contents_open {
+        self.keys.hint_targets = if self.contents_is_open() {
             self.document.headings().len()
         } else {
             0
@@ -286,7 +292,7 @@ impl Viewer {
         };
         match command {
             Command::Quit => return Flow::Quit,
-            Command::ToggleContents => self.contents_open = !self.contents_open,
+            Command::ToggleContents => self.contents_open = Some(!self.contents_is_open()),
             Command::Search { forward } => {
                 self.prompt = Some(Search {
                     pattern: String::new(),
@@ -476,6 +482,19 @@ impl Viewer {
             };
             frame.buffer_mut().set_style(area, style);
         }
+    }
+
+    fn contents_is_open(&self) -> bool {
+        self.contents_open == Some(true)
+    }
+
+    /// The contents starts open only where it leaves the page its full text width.
+    fn contents_fit_at_start(&mut self, width: u16) -> bool {
+        if width < contents::WIDTH + MAX_TEXT_WIDTH + 2 {
+            return false;
+        }
+        self.lay_out(usize::from(MAX_TEXT_WIDTH));
+        self.document.headings().len() >= MIN_HEADINGS_TO_OPEN_CONTENTS
     }
 
     /// Lays the text out again when the width changes, keeping the block at the top in place.
