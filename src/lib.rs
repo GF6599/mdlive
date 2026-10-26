@@ -1,17 +1,19 @@
 mod document;
 mod highlight;
+mod keys;
 mod table;
 pub mod theme;
 mod watch;
 mod wrap;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::KeyEvent;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::document::Document;
+use crate::keys::{Command, KeyReader};
 pub use crate::watch::{FileWatch, watch_file};
 
 /// Beyond this width a line of prose gets too long to read, so wider screens centre the text.
@@ -32,6 +34,7 @@ pub struct Viewer {
     top: usize,
     page: usize,
     error: Option<String>,
+    keys: KeyReader,
 }
 
 impl Viewer {
@@ -44,6 +47,7 @@ impl Viewer {
             top: 0,
             page: 0,
             error: None,
+            keys: KeyReader::default(),
         }
     }
 
@@ -79,8 +83,10 @@ impl Viewer {
             left.push(Span::styled(format!("  {error}"), theme::error()));
         }
         frame.render_widget(Paragraph::new(Line::from(left)), status);
+        let pending = self.keys.pending();
+        let gap = if pending.is_empty() { "" } else { "  " };
         frame.render_widget(
-            Paragraph::new(format!("{}% ", self.percent())).right_aligned(),
+            Paragraph::new(format!("{pending}{gap}{}% ", self.percent())).right_aligned(),
             status,
         );
     }
@@ -102,19 +108,31 @@ impl Viewer {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Flow {
-        let control = key.modifiers.contains(KeyModifiers::CONTROL);
-        match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => return Flow::Quit,
-            KeyCode::Char('c') if control => return Flow::Quit,
-            KeyCode::Char('j') | KeyCode::Down => self.scroll_to(self.top.saturating_add(1)),
-            KeyCode::Char('k') | KeyCode::Up => self.scroll_to(self.top.saturating_sub(1)),
-            KeyCode::PageDown | KeyCode::Char(' ') => {
-                self.scroll_to(self.top.saturating_add(self.page));
+        let half_page = (self.page / 2).max(1);
+        let Some(command) = self.keys.read(key) else {
+            return Flow::Continue;
+        };
+        match command {
+            Command::Quit => return Flow::Quit,
+            Command::Down(times) => self.scroll_to(self.top.saturating_add(times)),
+            Command::Up(times) => self.scroll_to(self.top.saturating_sub(times)),
+            Command::HalfPageDown(times) => {
+                self.scroll_to(self.top.saturating_add(half_page.saturating_mul(times)));
             }
-            KeyCode::PageUp => self.scroll_to(self.top.saturating_sub(self.page)),
-            KeyCode::Char('g') | KeyCode::Home => self.scroll_to(0),
-            KeyCode::Char('G') | KeyCode::End => self.scroll_to(usize::MAX),
-            _ => {}
+            Command::HalfPageUp(times) => {
+                self.scroll_to(self.top.saturating_sub(half_page.saturating_mul(times)));
+            }
+            Command::PageDown(times) => {
+                self.scroll_to(self.top.saturating_add(self.page.saturating_mul(times)));
+            }
+            Command::PageUp(times) => {
+                self.scroll_to(self.top.saturating_sub(self.page.saturating_mul(times)));
+            }
+            Command::Top => self.scroll_to(0),
+            Command::End => self.scroll_to(usize::MAX),
+            Command::SourceLine(line) => {
+                self.scroll_to(self.document.screen_line_of(line.saturating_sub(1)));
+            }
         }
         Flow::Continue
     }

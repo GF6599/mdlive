@@ -48,6 +48,18 @@ fn press(viewer: &mut Viewer, code: KeyCode) -> Flow {
     viewer.handle_key(KeyEvent::new(code, KeyModifiers::NONE))
 }
 
+/// Presses each character as a key, the way a reader types `5j` or `gg`.
+fn type_keys(viewer: &mut Viewer, keys: &str) -> Flow {
+    keys.chars()
+        .map(|key| press(viewer, KeyCode::Char(key)))
+        .last()
+        .unwrap_or(Flow::Continue)
+}
+
+fn control(viewer: &mut Viewer, key: char) -> Flow {
+    viewer.handle_key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::CONTROL))
+}
+
 fn find(buffer: &Buffer, text: &str) -> (u16, u16) {
     rows(buffer)
         .iter()
@@ -268,9 +280,142 @@ fn scrolls_with_the_keys_and_stops_at_the_ends() {
     // When: the reader scrolls down at the end, then jumps to the top
     press(&mut viewer, KeyCode::Char('j'));
     assert_eq!(first_row(&mut viewer), " • item 16");
-    press(&mut viewer, KeyCode::Char('g'));
+    type_keys(&mut viewer, "gg");
     // Then: the page is back at the top
     assert_eq!(first_row(&mut viewer), " • item 1");
+}
+
+/// The vim control keys scroll by a line, half a page, or a whole page, in both directions.
+///
+/// Why it matters: a reader who drives nvim all day presses these keys first, and a key that does
+/// nothing breaks their flow.
+#[test]
+fn scrolls_by_lines_and_pages_with_the_vim_control_keys() {
+    // Given: a list of 40 items on a screen with 10 rows for text
+    let markdown: String = (1..=40).map(|n| format!("- item {n}\n")).collect();
+    let mut viewer = Viewer::new("doc.md", &markdown);
+    let first_row = |viewer: &mut Viewer, key: char| {
+        control(viewer, key);
+        body(&draw(viewer, 30, 11))[0].clone()
+    };
+    draw(&mut viewer, 30, 11);
+
+    // Then: C-d and C-u move half a page, C-f and C-b a page, C-e and C-y a line
+    assert_eq!(first_row(&mut viewer, 'd'), " • item 6");
+    assert_eq!(first_row(&mut viewer, 'f'), " • item 16");
+    assert_eq!(first_row(&mut viewer, 'e'), " • item 17");
+    assert_eq!(first_row(&mut viewer, 'y'), " • item 16");
+    assert_eq!(first_row(&mut viewer, 'b'), " • item 6");
+    assert_eq!(first_row(&mut viewer, 'u'), " • item 1");
+}
+
+/// A count typed before a motion repeats it, as in vim.
+///
+/// Why it matters: without counts a reader has to press j twenty times to skip twenty lines.
+#[test]
+fn repeats_a_motion_by_the_count_typed_before_it() {
+    // Given: a list of 40 items on a screen with 10 rows for text
+    let markdown: String = (1..=40).map(|n| format!("- item {n}\n")).collect();
+    let mut viewer = Viewer::new("doc.md", &markdown);
+    let first_row = |viewer: &mut Viewer| body(&draw(viewer, 30, 11))[0].clone();
+    draw(&mut viewer, 30, 11);
+
+    // When: the reader types 5j, then 10j
+    type_keys(&mut viewer, "5j");
+    // Then: the page moves 5 lines, then 10 more
+    assert_eq!(first_row(&mut viewer), " • item 6");
+    type_keys(&mut viewer, "10j");
+    assert_eq!(first_row(&mut viewer), " • item 16");
+
+    // When: the reader types 2 and C-u
+    type_keys(&mut viewer, "2");
+    control(&mut viewer, 'u');
+    // Then: the page moves up two half pages
+    assert_eq!(first_row(&mut viewer), " • item 6");
+
+    // When: the reader types 3k
+    type_keys(&mut viewer, "3k");
+    // Then: the count applies once and is gone, so a following j moves one line
+    assert_eq!(first_row(&mut viewer), " • item 3");
+    type_keys(&mut viewer, "j");
+    assert_eq!(first_row(&mut viewer), " • item 4");
+}
+
+/// gg goes to the top, G to the end, and a count before either goes to that source line.
+///
+/// Why it matters: the count is a line number in the editor, so 30G must show the text that nvim
+/// shows on line 30, not the 30th line of the wrapped screen.
+#[test]
+fn goes_to_the_top_the_end_or_a_source_line() {
+    // Given: twelve paragraphs that each wrap to two screen lines, one per source line pair
+    let markdown: String = (1..=12)
+        .map(|n| format!("paragraph {n} wraps here\n\n"))
+        .collect();
+    let mut viewer = Viewer::new("doc.md", &markdown);
+    let first_row = |viewer: &mut Viewer| body(&draw(viewer, 14, 5))[0].clone();
+    draw(&mut viewer, 14, 5);
+
+    // When: the reader types 9G
+    type_keys(&mut viewer, "9G");
+    // Then: paragraph 5, which starts on source line 9, is at the top
+    assert_eq!(first_row(&mut viewer), " paragraph 5");
+
+    // When: the reader types G, then gg
+    type_keys(&mut viewer, "G");
+    assert_eq!(
+        body(&draw(&mut viewer, 14, 5)),
+        [" wraps here", "", " paragraph 12", " wraps here"]
+    );
+    type_keys(&mut viewer, "gg");
+    // Then: the page is at the end, then back at the top
+    assert_eq!(first_row(&mut viewer), " paragraph 1");
+
+    // When: the reader types 5gg
+    type_keys(&mut viewer, "5gg");
+    // Then: paragraph 3, which starts on source line 5, is at the top
+    assert_eq!(first_row(&mut viewer), " paragraph 3");
+    // And: the count is spent, so a following j moves one line
+    type_keys(&mut viewer, "j");
+    assert_eq!(first_row(&mut viewer), " wraps here");
+
+    // And: in a list, where every item has its own source line, 7G shows item 7
+    let markdown: String = (1..=40).map(|n| format!("- item {n}\n")).collect();
+    let mut list = Viewer::new("doc.md", &markdown);
+    draw(&mut list, 30, 11);
+    type_keys(&mut list, "7G");
+    assert_eq!(body(&draw(&mut list, 30, 11))[0], " • item 7");
+}
+
+/// Keys typed toward a command show in the status line, and Escape clears them before it quits.
+///
+/// Why it matters: a pending count that the reader cannot see changes the next motion by surprise,
+/// and an Escape that quits while a count is pending closes the viewer by accident.
+#[test]
+fn shows_pending_keys_and_clears_them_on_escape() {
+    // Given: a list of 40 items on a screen with 10 rows for text
+    let markdown: String = (1..=40).map(|n| format!("- item {n}\n")).collect();
+    let mut viewer = Viewer::new("doc.md", &markdown);
+    draw(&mut viewer, 30, 11);
+
+    // When: the reader types 12g
+    type_keys(&mut viewer, "12g");
+    // Then: the status line shows the pending keys before the percentage
+    assert!(status(&draw(&mut viewer, 30, 11)).ends_with("12g  25%"));
+
+    // When: the reader presses Escape
+    // Then: the pending keys clear and the viewer stays open
+    assert_eq!(press(&mut viewer, KeyCode::Esc), Flow::Continue);
+    assert!(status(&draw(&mut viewer, 30, 11)).ends_with(" 25%"));
+    assert!(!status(&draw(&mut viewer, 30, 11)).contains("12g"));
+
+    // When: the reader types g and a key that completes nothing, then j
+    type_keys(&mut viewer, "gxj");
+    // Then: the unfinished g is dropped and j moves one line
+    assert_eq!(body(&draw(&mut viewer, 30, 11))[0], " • item 2");
+
+    // When: the reader presses Escape with nothing pending
+    // Then: the viewer quits
+    assert_eq!(press(&mut viewer, KeyCode::Esc), Flow::Quit);
 }
 
 /// The quit keys end the viewer, and other keys keep it open.
