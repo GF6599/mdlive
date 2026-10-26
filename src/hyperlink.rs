@@ -12,16 +12,18 @@ pub struct LinkArea {
     pub url: String,
 }
 
-/// Whether a terminal can open the address: it starts with a scheme, and it holds no control
+/// A file, share or app address behind link text that hides it would start a program or mount a
+/// share on one click, so only these open.
+const OPENABLE_SCHEMES: [&str; 3] = ["http", "https", "mailto"];
+
+/// Whether a click may open the address: it is a web or mail address, and it holds no control
 /// character that could end the escape sequence it travels in.
 pub fn is_openable(url: &str) -> bool {
-    let Some((scheme, _)) = url.split_once(':') else {
-        return false;
-    };
-    let mut chars = scheme.chars();
-    chars.next().is_some_and(|c| c.is_ascii_alphabetic())
-        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
-        && !url.chars().any(char::is_control)
+    url.split_once(':').is_some_and(|(scheme, _)| {
+        OPENABLE_SCHEMES
+            .iter()
+            .any(|known| scheme.eq_ignore_ascii_case(known))
+    }) && !url.chars().any(char::is_control)
 }
 
 /// The cells to write after a frame so the terminal links them: the cells of each link inside

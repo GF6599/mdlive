@@ -120,26 +120,36 @@ fn links_text_in_lists_quotes_headings_and_tables() {
     );
 }
 
-/// Only an address with a scheme becomes a link, and a link whose address holds a control
-/// character is shown as plain text.
+/// Only a web or mail address becomes a link, and a link whose address holds a control character
+/// is shown as plain text.
 ///
 /// Why it matters: the address goes to the terminal inside an escape sequence, so a control
-/// character from the file could end that sequence and send the terminal commands of its own.
-/// A relative path or an anchor has nothing the terminal can open.
+/// character from the file could end that sequence and send the terminal commands of its own. A
+/// file, share or app address behind innocent link text would start a program or mount a share on
+/// one click. A relative path or an anchor has nothing the terminal can open.
 #[test]
 fn links_only_safe_absolute_addresses() {
-    // Given: an escape and a C1 control smuggled in through character references, a relative
-    // path, an anchor, and one good link
+    // Given: an escape and a C1 control smuggled in through character references, file, share
+    // and app addresses, a relative path, an anchor, and three good links
     let markdown = format!(
         "[esc](https://a.example/&#27;]2;title&#7;) [csi](https://a.example/&#x9b;31m) \
-         [rel](other.md) [anchor](#top) [good]({URL})\n"
+         [file](file:///Applications/Calculator.app) [share](smb://a.example/share) \
+         [app](x-man-page://ls) [rel](other.md) [anchor](#top)\n\n\
+         [good]({URL}) [plain](HTTP://a.example/) [mail](mailto:me@a.example)\n"
     );
 
     // When: the page is drawn
     let links = links_in(&markdown, 80, 5);
 
-    // Then: only the good link is linked
-    assert_eq!(links, [("good".to_string(), URL.to_string())]);
+    // Then: only the web and mail links are linked
+    assert_eq!(
+        links,
+        [
+            ("good".to_string(), URL.to_string()),
+            ("plain".to_string(), "HTTP://a.example/".to_string()),
+            ("mail".to_string(), "mailto:me@a.example".to_string()),
+        ]
+    );
 }
 
 /// The terminal receives each link cell inside an OSC 8 hyperlink, and a wide character once.
