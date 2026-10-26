@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 
 use image::imageops::FilterType;
 use image::{DynamicImage, ImageReader, Rgba};
@@ -11,6 +12,8 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui_image::picker::Picker;
 use ratatui_image::sliced::{SignedPosition, SlicedImage, SlicedProtocol};
+use resvg::tiny_skia::{Pixmap, Transform};
+use resvg::usvg;
 
 use crate::theme;
 
@@ -46,7 +49,7 @@ impl Pictures {
             picker.set_background_color(Some(Rgba([r, g, b, u8::MAX])));
         }
         Self {
-            base: base.to_path_buf(),
+            base: base.canonicalize().unwrap_or_else(|_| base.to_path_buf()),
             picker,
             loaded: HashMap::new(),
         }
@@ -59,15 +62,19 @@ impl Pictures {
         if has_scheme(url) {
             return Err("remote image, not fetched".to_string());
         }
-        let path = self.base.join(url);
-        if !path.exists() {
-            return Err(format!("not found: {url}"));
-        }
-        let (pixels_wide, pixels_high) = ImageReader::open(&path)
-            .and_then(ImageReader::with_guessed_format)
-            .map_err(|error| error.to_string())
-            .and_then(|reader| reader.into_dimensions().map_err(|error| error.to_string()))
-            .map_err(|error| format!("cannot read: {error}"))?;
+        let path = self
+            .resolve(url)
+            .ok_or_else(|| format!("not found: {url}"))?;
+        let (pixels_wide, pixels_high) = if is_svg(&path) {
+            let size = read_svg(&path, &usvg::Options::default())?.size();
+            (size.width().ceil() as u32, size.height().ceil() as u32)
+        } else {
+            ImageReader::open(&path)
+                .and_then(ImageReader::with_guessed_format)
+                .map_err(|error| error.to_string())
+                .and_then(|reader| reader.into_dimensions().map_err(|error| error.to_string()))
+                .map_err(|error| format!("cannot read: {error}"))?
+        };
         let font = self.picker.font_size();
         let (cell_wide, cell_high) = (u64::from(font.width.max(1)), u64::from(font.height.max(1)));
         let (wide, high) = (u64::from(pixels_wide.max(1)), u64::from(pixels_high.max(1)));
@@ -87,6 +94,33 @@ impl Pictures {
             columns: cells(wide, cell_wide),
             rows: cells(high, cell_high),
         })
+    }
+
+    /// The file a picture address names. A site-root address such as `/diagrams/a.svg` is found
+    /// the way a docs site serves it, in `public/` or `static/` or at the root of a folder above the
+    /// page, and the search stops at the repository so it never reaches an unrelated project.
+    fn resolve(&self, url: &str) -> Option<PathBuf> {
+        let Some(rooted) = url.strip_prefix('/') else {
+            let path = self.base.join(url);
+            return path.exists().then_some(path);
+        };
+        let absolute = PathBuf::from(url);
+        if absolute.exists() {
+            return Some(absolute);
+        }
+        for folder in self.base.ancestors() {
+            let found = SITE_ROOTS
+                .iter()
+                .map(|root| folder.join(root).join(rooted))
+                .find(|candidate| candidate.exists());
+            if found.is_some() {
+                return found;
+            }
+            if folder.join(".git").exists() {
+                break;
+            }
+        }
+        None
     }
 
     /// Draws a placed picture into `area` with its top left corner at `position` relative to
@@ -132,19 +166,27 @@ impl Pictures {
     }
 }
 
+/// The folders a docs site serves from its root: Next.js and Vite use `public`, Docusaurus uses
+/// `static`, and the VS Code preview uses the workspace folder itself.
+const SITE_ROOTS: [&str; 3] = ["public", "static", ""];
+
 /// A picture taller than this many rows is cut, because the sliced drawing positions rows with a
 /// signed 16-bit offset.
 const MAX_ROWS: u64 = 10_000;
 
 fn load(picker: &Picker, placed: &Placed) -> Result<SlicedProtocol, String> {
-    let image = ImageReader::open(&placed.path)
-        .and_then(ImageReader::with_guessed_format)
-        .map_err(|error| error.to_string())
-        .and_then(|reader| reader.decode().map_err(|error| error.to_string()))
-        .map_err(|error| format!("cannot read: {error}"))?;
     let font = picker.font_size();
     let wide = u32::from(placed.columns) * u32::from(font.width);
     let high = u32::from(placed.rows) * u32::from(font.height);
+    let image = if is_svg(&placed.path) {
+        draw_svg(&placed.path, wide, high)?
+    } else {
+        ImageReader::open(&placed.path)
+            .and_then(ImageReader::with_guessed_format)
+            .map_err(|error| error.to_string())
+            .and_then(|reader| reader.decode().map_err(|error| error.to_string()))
+            .map_err(|error| format!("cannot read: {error}"))?
+    };
     let image: DynamicImage = if image.width() > wide {
         image.resize(wide, high, FilterType::Triangle)
     } else {
@@ -152,6 +194,59 @@ fn load(picker: &Picker, placed: &Placed) -> Result<SlicedProtocol, String> {
     };
     let size = Size::new(placed.columns, placed.rows);
     SlicedProtocol::new(picker, image, Some(size)).map_err(|error| format!("cannot draw: {error}"))
+}
+
+fn is_svg(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"))
+}
+
+fn read_svg(path: &Path, options: &usvg::Options) -> Result<usvg::Tree, String> {
+    std::fs::read(path)
+        .map_err(|error| error.to_string())
+        .and_then(|data| usvg::Tree::from_data(&data, options).map_err(|error| error.to_string()))
+        .map_err(|error| format!("cannot read: {error}"))
+}
+
+/// Draws an SVG at the size it takes on screen, so it stays sharp at any width. Its labels need
+/// the system fonts, which take a moment to load, so they load once, on the first SVG drawn.
+fn draw_svg(path: &Path, wide: u32, high: u32) -> Result<DynamicImage, String> {
+    static FONTS: OnceLock<Arc<usvg::fontdb::Database>> = OnceLock::new();
+    let fonts = FONTS.get_or_init(|| {
+        let mut fonts = usvg::fontdb::Database::new();
+        fonts.load_system_fonts();
+        Arc::new(fonts)
+    });
+    let options = usvg::Options {
+        resources_dir: path.parent().map(Path::to_path_buf),
+        fontdb: Arc::clone(fonts),
+        ..usvg::Options::default()
+    };
+    let tree = read_svg(path, &options)?;
+    let size = tree.size();
+    let scale = (wide as f32 / size.width()).min(high as f32 / size.height());
+    let (pixels_wide, pixels_high) = (
+        (size.width() * scale).ceil() as u32,
+        (size.height() * scale).ceil() as u32,
+    );
+    let mut pixmap = Pixmap::new(pixels_wide.max(1), pixels_high.max(1))
+        .ok_or_else(|| "cannot draw: the picture has no area".to_string())?;
+    resvg::render(
+        &tree,
+        Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    let pixels = pixmap
+        .pixels()
+        .iter()
+        .flat_map(|pixel| {
+            let color = pixel.demultiply();
+            [color.red(), color.green(), color.blue(), color.alpha()]
+        })
+        .collect();
+    image::RgbaImage::from_raw(pixmap.width(), pixmap.height(), pixels)
+        .map(DynamicImage::ImageRgba8)
+        .ok_or_else(|| "cannot draw: the picture has the wrong size".to_string())
 }
 
 fn has_scheme(url: &str) -> bool {

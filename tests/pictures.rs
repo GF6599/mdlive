@@ -179,3 +179,62 @@ fn leaves_out_a_picture_under_the_contents_panel() {
         assert_eq!(painted(&buffer, y, RED), Vec::<u16>::new());
     }
 }
+
+/// A site-root path finds the picture in the site's public folder or at the repository root, and
+/// an SVG is drawn at its size.
+///
+/// Why it matters: docs sites serve `/diagrams/a.svg` from `public/`, so a page in a nested docs
+/// folder names its pictures that way, and most of those pictures are SVG diagrams.
+#[test]
+fn draws_site_root_and_svg_pictures_of_a_docs_page() {
+    // Given: a repository with a picture in public/, one at its root, and an SVG, and a page two
+    // folders down that names each from the site root
+    let repo = tempfile::tempdir().unwrap();
+    std::fs::create_dir(repo.path().join(".git")).unwrap();
+    picture(
+        &repo.path().join("public/diagrams/red.png"),
+        100,
+        20,
+        20,
+        RED,
+        RED,
+    );
+    picture(&repo.path().join("img/blue.png"), 100, 20, 20, BLUE, BLUE);
+    std::fs::write(
+        repo.path().join("public/diagrams/red.svg"),
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="40"><rect width="100" height="40" fill="#ff0000"/></svg>"##,
+    )
+    .unwrap();
+    let page = repo.path().join("docs/guide");
+    std::fs::create_dir_all(&page).unwrap();
+    let markdown = "![a](/diagrams/red.png)\n\n![b](/img/blue.png)\n\n![c](/diagrams/red.svg)\n";
+
+    // When: the page is drawn
+    let buffer = draw(&mut viewer(&page, markdown), 40, 10);
+
+    // Then: each picture is drawn at its size
+    let columns: Vec<u16> = (1..11).collect();
+    assert_eq!(painted(&buffer, 0, RED), columns);
+    assert_eq!(painted(&buffer, 2, BLUE), columns);
+    assert_eq!(painted(&buffer, 4, RED), columns);
+    assert_eq!(painted(&buffer, 5, RED), columns);
+}
+
+/// A site-root path does not look above the repository.
+///
+/// Why it matters: a page outside the site would otherwise show a picture from an unrelated
+/// project higher up the disk.
+#[test]
+fn stops_looking_for_a_site_root_picture_at_the_repository() {
+    // Given: a picture above a repository, and a page in the repository that names it from the root
+    let outer = tempfile::tempdir().unwrap();
+    picture(&outer.path().join("public/red.png"), 100, 20, 20, RED, RED);
+    let repo = outer.path().join("repo");
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+
+    // When: the page is drawn
+    let buffer = draw(&mut viewer(&repo, "![a](/red.png)\n"), 40, 4);
+
+    // Then: the picture is not found
+    assert_eq!(row(&buffer, 0), " ▣ a (not found: /red.png)");
+}

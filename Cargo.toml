@@ -12,6 +12,7 @@ notify-debouncer-mini = "0.7"
 pulldown-cmark = { version = "0.13", default-features = false }
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
 ratatui-image = { version = "11.1", default-features = false, features = ["crossterm"] }
+resvg = "0.49"
 syntect = { version = "5.3", default-features = false, features = ["parsing", "regex-fancy"] }
 techxt = "0.1.1"
 two-face = { version = "0.5", default-features = false, features = ["syntect-fancy"] }
