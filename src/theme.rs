@@ -127,3 +127,11 @@ pub fn contents_marked() -> Style {
 pub fn hint() -> Style {
     Style::new().fg(GOLD)
 }
+
+pub fn search_match() -> Style {
+    Style::new().fg(BASE).bg(GOLD)
+}
+
+pub fn search_current() -> Style {
+    Style::new().fg(BASE).bg(ROSE)
+}

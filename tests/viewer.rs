@@ -690,6 +690,140 @@ fn uses_two_letter_hints_past_the_single_letters() {
     assert!(page_top(&mut viewer).starts_with("Section 4 "));
 }
 
+/// Thirty one-line paragraphs, with "needle" in paragraphs 3, 15 and 25.
+fn haystack() -> Viewer {
+    let markdown: String = (1..=30)
+        .map(|n| match n {
+            3 | 15 | 25 => format!("line {n} needle\n\n"),
+            _ => format!("line {n}\n\n"),
+        })
+        .collect();
+    let mut viewer = Viewer::new("doc.md", &markdown);
+    draw(&mut viewer, 30, 6);
+    viewer
+}
+
+/// / searches forward from the page, and n and N step through the matches, wrapping at the ends.
+///
+/// Why it matters: search is how a reader finds a term on a long page, and a step that skips a
+/// match or wraps without saying so makes them think the term is not there.
+#[test]
+fn steps_through_the_matches_of_a_search() {
+    // Given: a page with three matches, the first one on screen
+    let mut viewer = haystack();
+
+    // When: the reader types /nee
+    type_keys(&mut viewer, "/nee");
+    // Then: the status line shows the pattern being typed
+    assert!(status(&draw(&mut viewer, 30, 6)).starts_with(" /nee"));
+
+    // When: the reader completes the pattern and presses Enter
+    type_keys(&mut viewer, "dle");
+    press(&mut viewer, KeyCode::Enter);
+    // Then: the match already on screen is the current one, and the page does not move
+    let buffer = draw(&mut viewer, 30, 6);
+    assert_eq!(body(&buffer)[4], " line 3 needle");
+    assert_eq!(buffer[(8, 4)].bg, theme::ROSE);
+
+    // When: the reader presses n, then n again
+    type_keys(&mut viewer, "n");
+    // Then: each next match comes to the top as the current one
+    let buffer = draw(&mut viewer, 30, 6);
+    assert_eq!(body(&buffer)[0], " line 15 needle");
+    assert_eq!(buffer[(9, 0)].bg, theme::ROSE);
+    type_keys(&mut viewer, "n");
+    assert_eq!(body(&draw(&mut viewer, 30, 6))[0], " line 25 needle");
+
+    // When: the reader presses n past the last match
+    type_keys(&mut viewer, "n");
+    // Then: the search wraps to the first match and says so, on a screen wide enough to read it
+    let buffer = draw(&mut viewer, 60, 6);
+    assert_eq!(body(&buffer)[0], " line 3 needle");
+    assert!(status(&buffer).contains("search hit BOTTOM, continuing at TOP"));
+
+    // When: the reader presses N
+    type_keys(&mut viewer, "N");
+    // Then: the search goes back past the first match to the last, and says so
+    let buffer = draw(&mut viewer, 60, 6);
+    assert_eq!(body(&buffer)[0], " line 25 needle");
+    assert!(status(&buffer).contains("search hit TOP, continuing at BOTTOM"));
+
+    // When: the reader types 2n from the last match
+    type_keys(&mut viewer, "2n");
+    // Then: the count steps twice, wrapping past the end to the second match
+    assert_eq!(body(&draw(&mut viewer, 30, 6))[0], " line 15 needle");
+}
+
+/// ? searches backward, a missing pattern is reported, and Escape leaves the prompt unrun.
+///
+/// Why it matters: a search that fails silently looks like a search that found nothing on screen,
+/// and an Escape that runs the half-typed pattern moves the page the reader meant to keep.
+#[test]
+fn searches_backward_reports_a_missing_pattern_and_cancels_on_escape() {
+    // Given: a page with three matches, at the top
+    let mut viewer = haystack();
+
+    // When: the reader types ?needle and Enter
+    type_keys(&mut viewer, "?needle");
+    press(&mut viewer, KeyCode::Enter);
+    // Then: with nothing above the top, the search wraps to the last match
+    assert_eq!(body(&draw(&mut viewer, 30, 6))[0], " line 25 needle");
+
+    // When: the reader searches for a pattern the page does not hold
+    type_keys(&mut viewer, "/absent");
+    press(&mut viewer, KeyCode::Enter);
+    // Then: the status line says so in the error colour, and the page stays
+    let buffer = draw(&mut viewer, 60, 6);
+    assert_eq!(body(&buffer)[0], " line 25 needle");
+    let (x, y) = find(&buffer, "Pattern not found: absent");
+    assert_eq!(buffer[(x, y)].fg, theme::LOVE);
+
+    // When: the reader types /line 3 and presses Escape
+    type_keys(&mut viewer, "/line 3");
+    // Then: the prompt closes, the title is back, and the page stays
+    assert_eq!(press(&mut viewer, KeyCode::Esc), Flow::Continue);
+    let buffer = draw(&mut viewer, 30, 6);
+    assert!(status(&buffer).starts_with(" doc.md"));
+    assert_eq!(body(&buffer)[0], " line 25 needle");
+}
+
+/// The search reads the rendered text, ignores case unless the pattern has a capital, and marks
+/// every match, again after a reload.
+///
+/// Why it matters: a reader searches for the words they see, not for the Markdown around them, and
+/// a highlight left on old positions after a save points at the wrong text.
+#[test]
+fn searches_the_rendered_text_with_smartcase_and_marks_every_match() {
+    // Given: a line with the word twice, once inside bold markup
+    let markdown = "Some **Bold** text and bold again\n";
+    let mut viewer = Viewer::new("doc.md", markdown);
+    draw(&mut viewer, 40, 4);
+
+    // When: the reader searches for the word in lowercase
+    type_keys(&mut viewer, "/bold");
+    press(&mut viewer, KeyCode::Enter);
+    // Then: both are marked, the first as the current match
+    let buffer = draw(&mut viewer, 40, 4);
+    assert_eq!(body(&buffer)[0], " Some Bold text and bold again");
+    assert_eq!(buffer[(6, 0)].bg, theme::ROSE);
+    assert_eq!(buffer[(20, 0)].bg, theme::GOLD);
+
+    // When: the reader searches with a capital letter
+    type_keys(&mut viewer, "/Bold");
+    press(&mut viewer, KeyCode::Enter);
+    // Then: only the capitalised word matches
+    let buffer = draw(&mut viewer, 40, 4);
+    assert_eq!(buffer[(6, 0)].bg, theme::ROSE);
+    assert_eq!(buffer[(20, 0)].bg, theme::BASE);
+
+    // When: the file is saved with a new first line whose word sits where the current match was
+    viewer.reload(&format!("Some Bold here\n\n{markdown}"));
+    // Then: the marks move with the text, and none takes the current colour from the old place
+    let buffer = draw(&mut viewer, 40, 4);
+    assert_eq!(buffer[(6, 0)].bg, theme::GOLD);
+    assert_eq!(buffer[(6, 2)].bg, theme::GOLD);
+}
+
 /// The quit keys end the viewer, and other keys keep it open.
 ///
 /// Why it matters: a viewer that ignores q traps the reader in the terminal.

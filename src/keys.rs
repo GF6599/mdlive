@@ -26,6 +26,13 @@ pub enum Command {
     SourceLine(usize),
     /// A heading of the contents, by its place in the list.
     Heading(usize),
+    Search {
+        forward: bool,
+    },
+    RepeatSearch {
+        reverse: bool,
+        times: usize,
+    },
 }
 
 /// The hint of each of `count` entries. Past one letter's worth, every hint takes two letters so
@@ -108,6 +115,16 @@ impl KeyReader {
         match key.code {
             KeyCode::Char('q') if !control => Some(Command::Quit),
             KeyCode::Char('t') if !control => Some(Command::ToggleContents),
+            KeyCode::Char('/') => Some(Command::Search { forward: true }),
+            KeyCode::Char('?') => Some(Command::Search { forward: false }),
+            KeyCode::Char('n') if !control => Some(Command::RepeatSearch {
+                reverse: false,
+                times,
+            }),
+            KeyCode::Char('N') => Some(Command::RepeatSearch {
+                reverse: true,
+                times,
+            }),
             KeyCode::Char('j') if !control => Some(Command::Down(times)),
             KeyCode::Char('e') if control => Some(Command::Down(times)),
             KeyCode::Down => Some(Command::Down(times)),

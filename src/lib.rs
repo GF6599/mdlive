@@ -2,19 +2,22 @@ mod contents;
 mod document;
 mod highlight;
 mod keys;
+mod search;
 mod table;
 pub mod theme;
 mod watch;
 mod wrap;
 
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::document::Document;
 use crate::keys::{Command, KeyReader};
+use crate::search::{Match, find_all};
 pub use crate::watch::{FileWatch, watch_file};
 
 /// Beyond this width a line of prose gets too long to read, so wider screens centre the text.
@@ -29,6 +32,12 @@ pub enum Flow {
 }
 
 #[derive(Debug)]
+struct Search {
+    pattern: String,
+    forward: bool,
+}
+
+#[derive(Debug)]
 pub struct Viewer {
     title: String,
     markdown: String,
@@ -39,6 +48,12 @@ pub struct Viewer {
     error: Option<String>,
     keys: KeyReader,
     contents_open: bool,
+    /// The search being typed in the status line.
+    prompt: Option<Search>,
+    search: Option<Search>,
+    current_match: Option<Match>,
+    /// A note on the last search, such as a wrap at the end of the page.
+    notice: Option<(String, Style)>,
 }
 
 impl Viewer {
@@ -53,6 +68,10 @@ impl Viewer {
             error: None,
             keys: KeyReader::default(),
             contents_open: false,
+            prompt: None,
+            search: None,
+            current_match: None,
+            notice: None,
         }
     }
 
@@ -93,13 +112,21 @@ impl Viewer {
             .cloned()
             .collect();
         frame.render_widget(Paragraph::new(lines), text);
+        self.mark_matches(frame, text);
         if let Some(panel) = panel {
             let current = self.document.heading_at(self.top);
             contents::draw(frame, panel, self.document.headings(), current);
         }
 
         frame.buffer_mut().set_style(status, theme::status());
-        let mut left = vec![Span::raw(format!(" {}", self.title))];
+        let mut left = match (&self.prompt, &self.notice) {
+            (Some(prompt), _) => {
+                let mark = if prompt.forward { '/' } else { '?' };
+                vec![Span::raw(format!(" {mark}{}", prompt.pattern))]
+            }
+            (None, Some((notice, style))) => vec![Span::styled(format!(" {notice}"), *style)],
+            (None, None) => vec![Span::raw(format!(" {}", self.title))],
+        };
         if let Some(error) = &self.error {
             left.push(Span::styled(format!("  {error}"), theme::error()));
         }
@@ -119,6 +146,7 @@ impl Viewer {
         if let Some(width) = self.width {
             let anchor = self.document.anchor(self.top);
             self.document = Document::render(&self.markdown, width);
+            self.current_match = None;
             self.top = self.document.screen_line_at(&anchor);
         }
     }
@@ -129,6 +157,11 @@ impl Viewer {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Flow {
+        if self.prompt.is_some() {
+            self.edit_prompt(key);
+            return Flow::Continue;
+        }
+        self.notice = None;
         let half_page = (self.page / 2).max(1);
         self.keys.hint_targets = if self.contents_open {
             self.document.headings().len()
@@ -141,6 +174,13 @@ impl Viewer {
         match command {
             Command::Quit => return Flow::Quit,
             Command::ToggleContents => self.contents_open = !self.contents_open,
+            Command::Search { forward } => {
+                self.prompt = Some(Search {
+                    pattern: String::new(),
+                    forward,
+                });
+            }
+            Command::RepeatSearch { reverse, times } => self.step_search(reverse, times),
             Command::Heading(index) => {
                 if let Some(heading) = self.document.headings().get(index) {
                     self.scroll_to(heading.line);
@@ -204,6 +244,107 @@ impl Viewer {
         self.scroll_to(top);
     }
 
+    fn edit_prompt(&mut self, key: KeyEvent) {
+        let Some(prompt) = &mut self.prompt else {
+            return;
+        };
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Enter => {
+                self.search = self
+                    .prompt
+                    .take()
+                    .filter(|search| !search.pattern.is_empty());
+                self.current_match = None;
+                if self.search.is_some() {
+                    self.step_search(false, 1);
+                }
+            }
+            KeyCode::Esc => self.prompt = None,
+            KeyCode::Char('c') if control => self.prompt = None,
+            KeyCode::Backspace => {
+                if prompt.pattern.pop().is_none() {
+                    self.prompt = None;
+                }
+            }
+            KeyCode::Char(c) if !control => prompt.pattern.push(c),
+            _ => {}
+        }
+    }
+
+    /// Moves `times` matches on in the search direction, or against it when `reverse`, and wraps
+    /// at the ends of the page. The page scrolls only when the match is off screen.
+    fn step_search(&mut self, reverse: bool, times: usize) {
+        let Some(search) = &self.search else {
+            return;
+        };
+        let matches = find_all(self.document.lines(), &search.pattern);
+        let forward = search.forward != reverse;
+        if matches.is_empty() {
+            let notice = format!("Pattern not found: {}", search.pattern);
+            self.notice = Some((notice, theme::error()));
+            return;
+        }
+        // Counted from the end of the page when going backward, so both directions step up.
+        let ahead = match (self.current_match, forward) {
+            (Some(current), true) => matches.iter().filter(|m| **m <= current).count(),
+            (Some(current), false) => matches.iter().filter(|m| **m >= current).count(),
+            (None, true) => matches.iter().filter(|m| m.line < self.top).count(),
+            (None, false) => matches.iter().filter(|m| m.line >= self.top).count(),
+        };
+        let steps = ahead.saturating_add(times.max(1) - 1);
+        let wrapped = steps >= matches.len();
+        let index = steps % matches.len();
+        let found = if forward {
+            matches[index]
+        } else {
+            matches[matches.len() - 1 - index]
+        };
+        if wrapped {
+            let notice = if forward {
+                "search hit BOTTOM, continuing at TOP"
+            } else {
+                "search hit TOP, continuing at BOTTOM"
+            };
+            self.notice = Some((notice.to_string(), theme::status()));
+        }
+        self.current_match = Some(found);
+        if found.line < self.top || found.line >= self.top + self.page {
+            self.scroll_to(found.line);
+        }
+    }
+
+    fn mark_matches(&self, frame: &mut Frame, text: Rect) {
+        let Some(search) = &self.search else {
+            return;
+        };
+        let lines = self.document.lines();
+        let bottom = (self.top + usize::from(text.height)).min(lines.len());
+        let shown = lines.get(self.top..bottom).unwrap_or_default();
+        for mut found in find_all(shown, &search.pattern) {
+            found.line += self.top;
+            let style = if self.current_match == Some(found) {
+                theme::search_current()
+            } else {
+                theme::search_match()
+            };
+            let (Ok(row), Ok(column), Ok(width)) = (
+                u16::try_from(found.line - self.top),
+                u16::try_from(found.column),
+                u16::try_from(found.width),
+            ) else {
+                continue;
+            };
+            let area = Rect {
+                x: text.x + column,
+                y: text.y + row,
+                width: width.min(text.width.saturating_sub(column)),
+                height: 1,
+            };
+            frame.buffer_mut().set_style(area, style);
+        }
+    }
+
     /// Lays the text out again when the width changes, keeping the block at the top in place.
     fn lay_out(&mut self, width: usize) {
         if self.width == Some(width) {
@@ -211,6 +352,7 @@ impl Viewer {
         }
         let anchor = self.document.source_line_at(self.top);
         self.document = Document::render(&self.markdown, width);
+        self.current_match = None;
         if self.width.is_some() {
             self.top = self.document.screen_line_of(anchor);
         }
