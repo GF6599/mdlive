@@ -130,12 +130,22 @@ impl Viewer {
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Flow {
         let half_page = (self.page / 2).max(1);
+        self.keys.hint_targets = if self.contents_open {
+            self.document.headings().len()
+        } else {
+            0
+        };
         let Some(command) = self.keys.read(key) else {
             return Flow::Continue;
         };
         match command {
             Command::Quit => return Flow::Quit,
             Command::ToggleContents => self.contents_open = !self.contents_open,
+            Command::Heading(index) => {
+                if let Some(heading) = self.document.headings().get(index) {
+                    self.scroll_to(heading.line);
+                }
+            }
             Command::Down(times) => self.scroll_to(self.top.saturating_add(times)),
             Command::Up(times) => self.scroll_to(self.top.saturating_sub(times)),
             Command::HalfPageDown(times) => {

@@ -6,6 +6,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::document::Heading;
+use crate::keys::hints;
 use crate::theme;
 
 pub const WIDTH: u16 = 30;
@@ -38,21 +39,28 @@ pub fn draw(frame: &mut Frame, area: Rect, headings: &[Heading], current: Option
         .unwrap_or(0)
         .saturating_sub(rows / 2)
         .min(headings.len().saturating_sub(rows));
+    let hints = hints(headings.len());
     let lines: Vec<Line> = headings
         .iter()
         .enumerate()
         .skip(first)
         .take(rows)
         .map(|(index, heading)| {
+            let hint = hints
+                .get(index)
+                .map(|hint| format!("[{hint}] "))
+                .unwrap_or_default();
             let indent = " ".repeat(INDENT * usize::from(heading.level - top_level));
-            let text = fit(&format!(" {indent}{}", heading.text), text_width);
-            let pad = " ".repeat(text_width.saturating_sub(text.width()));
+            let lead = format!(" {hint}{indent}");
+            let text = fit(&heading.text, text_width.saturating_sub(lead.width()));
+            let pad = " ".repeat(text_width.saturating_sub(lead.width() + text.width()));
             let (style, marker) = if current == Some(index) {
                 (theme::contents_marked(), MARKER)
             } else {
                 (theme::contents_entry(heading.level), " ")
             };
             Line::from(vec![
+                Span::styled(lead, theme::hint()),
                 Span::styled(text, style),
                 Span::raw(pad),
                 Span::styled(marker, theme::contents_marked()),

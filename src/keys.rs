@@ -1,5 +1,11 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+/// The letters no other key takes, home row first. `z` stays out because the fold keys start
+/// with it.
+const HINT_LETTERS: [char; 19] = [
+    'a', 's', 'd', 'f', 'h', 'l', 'e', 'r', 'u', 'i', 'o', 'p', 'w', 'y', 'c', 'v', 'b', 'm', 'x',
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     Quit,
@@ -18,6 +24,25 @@ pub enum Command {
     PreviousBlock(usize),
     /// A line of the Markdown source, counted from 1 as an editor counts it.
     SourceLine(usize),
+    /// A heading of the contents, by its place in the list.
+    Heading(usize),
+}
+
+/// The hint of each of `count` entries. Past one letter's worth, every hint takes two letters so
+/// that no hint starts another. Entries past two letters' worth get none.
+pub fn hints(count: usize) -> Vec<String> {
+    if count <= HINT_LETTERS.len() {
+        return HINT_LETTERS[..count].iter().map(char::to_string).collect();
+    }
+    HINT_LETTERS
+        .iter()
+        .flat_map(|first| {
+            HINT_LETTERS
+                .iter()
+                .map(move |second| format!("{first}{second}"))
+        })
+        .take(count)
+        .collect()
 }
 
 /// Turns key presses into commands, holding a count and a prefix key until the command is whole.
@@ -25,6 +50,8 @@ pub enum Command {
 pub struct KeyReader {
     count: Option<usize>,
     prefix: Option<char>,
+    /// How many contents entries the hint letters reach, 0 while the contents is closed.
+    pub hint_targets: usize,
 }
 
 impl KeyReader {
@@ -45,6 +72,7 @@ impl KeyReader {
                 ('g', KeyCode::Char('g')) => Some(count.map_or(Command::Top, Command::SourceLine)),
                 (']', KeyCode::Char(']')) => Some(Command::NextHeading(times)),
                 ('[', KeyCode::Char('[')) => Some(Command::PreviousHeading(times)),
+                (first, KeyCode::Char(second)) => self.hint(&format!("{first}{second}")),
                 _ => None,
             };
         }
@@ -60,6 +88,19 @@ impl KeyReader {
                     .saturating_add(value),
             );
             return None;
+        }
+
+        if let KeyCode::Char(letter) = key.code
+            && !control
+            && self.hint_targets > 0
+            && HINT_LETTERS.contains(&letter)
+        {
+            self.count = None;
+            if self.hint_targets > HINT_LETTERS.len() {
+                self.prefix = Some(letter);
+                return None;
+            }
+            return self.hint(&letter.to_string());
         }
 
         let count = self.count.take();
@@ -101,6 +142,13 @@ impl KeyReader {
             .unwrap_or_default();
         let prefix = self.prefix.map(String::from).unwrap_or_default();
         count + &prefix
+    }
+
+    fn hint(&self, typed: &str) -> Option<Command> {
+        hints(self.hint_targets)
+            .iter()
+            .position(|hint| hint == typed)
+            .map(Command::Heading)
     }
 
     fn clear(&mut self) {

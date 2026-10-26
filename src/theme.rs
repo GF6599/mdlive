@@ -123,3 +123,7 @@ pub fn contents_entry(level: u8) -> Style {
 pub fn contents_marked() -> Style {
     Style::new().fg(ROSE).add_modifier(Modifier::BOLD)
 }
+
+pub fn hint() -> Style {
+    Style::new().fg(GOLD)
+}

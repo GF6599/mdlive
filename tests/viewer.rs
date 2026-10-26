@@ -526,10 +526,10 @@ fn shows_the_contents_beside_the_page_and_marks_the_section_in_view() {
     assert_eq!(
         panel[1..6],
         [
-            entry(" Guide", true),
-            entry("   Install", false),
-            entry("     Flags", false),
-            entry("   Usage", false),
+            entry(" [a] Guide", true),
+            entry(" [s]   Install", false),
+            entry(" [d]     Flags", false),
+            entry(" [f]   Usage", false),
             entry("", false),
         ]
     );
@@ -542,14 +542,17 @@ fn shows_the_contents_beside_the_page_and_marks_the_section_in_view() {
     let panel = columns(&draw(&mut viewer, 80, 12), 0, 30);
     assert_eq!(
         panel[2..4],
-        [entry("   Install", false), entry("     Flags", true)]
+        [
+            entry(" [s]   Install", false),
+            entry(" [d]     Flags", true)
+        ]
     );
 
     // When: the file gains a paragraph above
     viewer.reload(&markdown.replace("intro\n\n", "intro\n\nadded\n\n"));
     // Then: the marker stays on the section
     let panel = columns(&draw(&mut viewer, 80, 12), 0, 30);
-    assert_eq!(panel[3], entry("     Flags", true));
+    assert_eq!(panel[3], entry(" [d]     Flags", true));
 
     // When: the reader presses t again
     type_keys(&mut viewer, "t");
@@ -577,7 +580,7 @@ fn keeps_the_marked_entry_in_view_and_cuts_long_headings() {
 
     // Then: the long heading is cut to the panel with an ellipsis
     let panel = columns(&draw(&mut viewer, 80, 10), 0, 30);
-    assert_eq!(panel[1], entry(&format!(" {}…", &title[..25]), true));
+    assert_eq!(panel[1], entry(&format!(" [aa] {}…", &title[..20]), true));
 
     // When: the reader goes to the end
     type_keys(&mut viewer, "G");
@@ -586,7 +589,10 @@ fn keeps_the_marked_entry_in_view_and_cuts_long_headings() {
     let panel = columns(&draw(&mut viewer, 80, 10), 0, 30);
     assert_eq!(
         panel[6..8],
-        [entry(" Section 29", true), entry(" Section 30", false)]
+        [
+            entry(" [so] Section 29", true),
+            entry(" [sp] Section 30", false)
+        ]
     );
     assert!(!panel.iter().any(|row| row.contains("A heading")));
 
@@ -615,6 +621,73 @@ fn covers_the_page_on_a_narrow_screen() {
     // Then: the panel shows on the left, and the page beside it is laid out as before
     assert!(columns(&buffer, 0, 30)[0].starts_with("┌ Contents "));
     assert_eq!(columns(&buffer, 30, 60), before);
+}
+
+/// With the contents open, each entry's hint letter puts its heading at the top.
+///
+/// Why it matters: the hint is the one-key way to reach any section, so a hint that lands on the
+/// wrong heading, or a letter that acts while the contents is closed, sends the reader elsewhere.
+#[test]
+fn jumps_to_a_section_by_its_hint_letter() {
+    // Given: four headings, then enough text to scroll, with the contents open
+    let filler: String = (1..=8).map(|n| format!("filler {n}\n\n")).collect();
+    let markdown = format!(
+        "# Guide\n\nintro\n\n## Install\n\ntext\n\n### Flags\n\ntext\n\n## Usage\n\n{filler}"
+    );
+    let mut viewer = Viewer::new("doc.md", &markdown);
+    let page_top = |viewer: &mut Viewer| columns(&draw(viewer, 80, 12), 31, 80)[0].clone();
+    draw(&mut viewer, 80, 12);
+    type_keys(&mut viewer, "t");
+
+    // When: the reader presses d, the hint of Flags
+    type_keys(&mut viewer, "d");
+    // Then: Flags is at the top of the page
+    assert!(page_top(&mut viewer).starts_with("Flags"));
+
+    // When: the reader presses x, a hint letter no entry has
+    type_keys(&mut viewer, "x");
+    // Then: the page stays where it is
+    assert!(page_top(&mut viewer).starts_with("Flags"));
+
+    // When: the reader closes the contents and presses s
+    type_keys(&mut viewer, "ts");
+    // Then: the letter does nothing, so the page still starts at Flags
+    let buffer = draw(&mut viewer, 80, 12);
+    assert_eq!(find(&buffer, "Flags"), (1, 0));
+}
+
+/// Past 19 headings every hint has two letters, the first shows as pending, and Escape drops it.
+///
+/// Why it matters: with mixed one- and two-letter hints, a one-letter hint would also start a
+/// two-letter one, so the reader could never reach the longer one.
+#[test]
+fn uses_two_letter_hints_past_the_single_letters() {
+    // Given: 25 sections, then enough text to scroll, with the contents open
+    let sections: String = (1..=25)
+        .map(|n| format!("## Section {n}\n\ntext\n\n"))
+        .collect();
+    let mut viewer = Viewer::new("doc.md", &sections);
+    let page_top = |viewer: &mut Viewer| columns(&draw(viewer, 80, 10), 31, 80)[0].clone();
+    draw(&mut viewer, 80, 10);
+    type_keys(&mut viewer, "t");
+
+    // When: the reader presses a
+    type_keys(&mut viewer, "a");
+    // Then: the page has not moved, and the status line shows a as pending
+    assert!(page_top(&mut viewer).starts_with("Section 1 "));
+    assert!(status(&draw(&mut viewer, 80, 10)).contains(" a  "));
+
+    // When: the reader presses s, completing the hint as
+    type_keys(&mut viewer, "s");
+    // Then: Section 2 is at the top
+    assert!(page_top(&mut viewer).starts_with("Section 2 "));
+
+    // When: the reader presses s, then Escape, then a and f
+    type_keys(&mut viewer, "s");
+    press(&mut viewer, KeyCode::Esc);
+    type_keys(&mut viewer, "af");
+    // Then: the dropped s starts nothing, and af, the fourth hint, reaches Section 4
+    assert!(page_top(&mut viewer).starts_with("Section 4 "));
 }
 
 /// The quit keys end the viewer, and other keys keep it open.
