@@ -33,9 +33,10 @@ pub struct Document {
 }
 
 #[derive(Debug)]
-struct Heading {
-    line: usize,
-    text: String,
+pub struct Heading {
+    pub line: usize,
+    pub level: u8,
+    pub text: String,
 }
 
 /// A place in a document that survives an edit: a heading and the lines below it, with the source
@@ -63,6 +64,17 @@ impl Document {
         self.lines.is_empty()
     }
 
+    pub fn headings(&self) -> &[Heading] {
+        &self.headings
+    }
+
+    /// The index of the heading whose section holds the screen line `top`.
+    pub fn heading_at(&self, top: usize) -> Option<usize> {
+        self.headings
+            .iter()
+            .rposition(|heading| heading.line <= top)
+    }
+
     pub fn source_line_at(&self, screen_line: usize) -> usize {
         self.sources
             .get(screen_line)
@@ -74,18 +86,14 @@ impl Document {
     /// Where the screen line `top` sits: under which heading, the how-manyth with that text, and
     /// how far below it.
     pub fn anchor(&self, top: usize) -> Anchor {
-        let heading = self
-            .headings
-            .iter()
-            .rposition(|heading| heading.line <= top)
-            .map(|index| {
-                let heading = &self.headings[index];
-                let occurrence = self.headings[..index]
-                    .iter()
-                    .filter(|earlier| earlier.text == heading.text)
-                    .count();
-                (heading.text.clone(), occurrence, top - heading.line)
-            });
+        let heading = self.heading_at(top).map(|index| {
+            let heading = &self.headings[index];
+            let occurrence = self.headings[..index]
+                .iter()
+                .filter(|earlier| earlier.text == heading.text)
+                .count();
+            (heading.text.clone(), occurrence, top - heading.line)
+        });
         Anchor {
             heading,
             source_line: self.source_line_at(top),
@@ -526,6 +534,7 @@ impl Builder {
             Block::Heading { spans, level } => {
                 self.document.headings.push(Heading {
                     line: self.document.len(),
+                    level,
                     text: spans.iter().map(|span| span.content.as_ref()).collect(),
                 });
                 self.push_wrapped(&spans, width, line);

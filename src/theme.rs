@@ -107,3 +107,19 @@ pub fn code_block() -> Style {
 pub fn html() -> Style {
     Style::new().fg(MUTED)
 }
+
+pub fn panel_border() -> Style {
+    Style::new().fg(HL_MED)
+}
+
+pub fn panel_title() -> Style {
+    Style::new().fg(SUBTLE)
+}
+
+pub fn contents_entry(level: u8) -> Style {
+    Style::new().fg(if level <= 2 { TEXT } else { SUBTLE })
+}
+
+pub fn contents_marked() -> Style {
+    Style::new().fg(ROSE).add_modifier(Modifier::BOLD)
+}

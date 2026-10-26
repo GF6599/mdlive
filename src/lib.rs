@@ -1,3 +1,4 @@
+mod contents;
 mod document;
 mod highlight;
 mod keys;
@@ -18,6 +19,8 @@ pub use crate::watch::{FileWatch, watch_file};
 
 /// Beyond this width a line of prose gets too long to read, so wider screens centre the text.
 const MAX_TEXT_WIDTH: u16 = 100;
+/// Below this width the text wraps every few words, so the contents covers the page instead.
+const MIN_TEXT_BESIDE_CONTENTS: u16 = 40;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flow {
@@ -35,6 +38,7 @@ pub struct Viewer {
     page: usize,
     error: Option<String>,
     keys: KeyReader,
+    contents_open: bool,
 }
 
 impl Viewer {
@@ -48,6 +52,7 @@ impl Viewer {
             page: 0,
             error: None,
             keys: KeyReader::default(),
+            contents_open: false,
         }
     }
 
@@ -57,13 +62,25 @@ impl Viewer {
         let [body, status] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
 
-        let text_width = area.width.saturating_sub(2).clamp(1, MAX_TEXT_WIDTH);
+        let panel = self.contents_open.then(|| Rect {
+            width: contents::WIDTH.min(body.width),
+            ..body
+        });
+        let page = match panel {
+            Some(panel) if body.width - panel.width >= MIN_TEXT_BESIDE_CONTENTS + 2 => Rect {
+                x: body.x + panel.width,
+                width: body.width - panel.width,
+                ..body
+            },
+            _ => body,
+        };
+        let text_width = page.width.saturating_sub(2).clamp(1, MAX_TEXT_WIDTH);
         self.lay_out(usize::from(text_width));
         self.page = usize::from(body.height);
         self.top = self.top.min(self.last_top());
 
         let text = Rect {
-            x: area.x + (area.width.saturating_sub(text_width)) / 2,
+            x: page.x + (page.width.saturating_sub(text_width)) / 2,
             width: text_width,
             ..body
         };
@@ -76,6 +93,10 @@ impl Viewer {
             .cloned()
             .collect();
         frame.render_widget(Paragraph::new(lines), text);
+        if let Some(panel) = panel {
+            let current = self.document.heading_at(self.top);
+            contents::draw(frame, panel, self.document.headings(), current);
+        }
 
         frame.buffer_mut().set_style(status, theme::status());
         let mut left = vec![Span::raw(format!(" {}", self.title))];
@@ -114,6 +135,7 @@ impl Viewer {
         };
         match command {
             Command::Quit => return Flow::Quit,
+            Command::ToggleContents => self.contents_open = !self.contents_open,
             Command::Down(times) => self.scroll_to(self.top.saturating_add(times)),
             Command::Up(times) => self.scroll_to(self.top.saturating_sub(times)),
             Command::HalfPageDown(times) => {

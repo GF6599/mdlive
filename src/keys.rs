@@ -11,6 +11,7 @@ pub enum Command {
     PageUp(usize),
     Top,
     End,
+    ToggleContents,
     NextHeading(usize),
     PreviousHeading(usize),
     NextBlock(usize),
@@ -65,6 +66,7 @@ impl KeyReader {
         let times = count.unwrap_or(1);
         match key.code {
             KeyCode::Char('q') if !control => Some(Command::Quit),
+            KeyCode::Char('t') if !control => Some(Command::ToggleContents),
             KeyCode::Char('j') if !control => Some(Command::Down(times)),
             KeyCode::Char('e') if control => Some(Command::Down(times)),
             KeyCode::Down => Some(Command::Down(times)),

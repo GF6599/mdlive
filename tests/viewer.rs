@@ -60,6 +60,18 @@ fn control(viewer: &mut Viewer, key: char) -> Flow {
     viewer.handle_key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::CONTROL))
 }
 
+/// The cells of each body row from column `from` up to `to`, untrimmed, for one side of a split.
+fn columns(buffer: &Buffer, from: u16, to: u16) -> Vec<String> {
+    (0..buffer.area.height - 1)
+        .map(|y| (from..to).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect()
+}
+
+/// A row of the contents panel: 27 columns of entry text, then the marker column.
+fn entry(text: &str, marked: bool) -> String {
+    format!("│{text:<27}{}│", if marked { '◀' } else { ' ' })
+}
+
 fn find(buffer: &Buffer, text: &str) -> (u16, u16) {
     rows(buffer)
         .iter()
@@ -488,6 +500,121 @@ fn jumps_between_blocks_with_the_paragraph_keys() {
     type_keys(&mut viewer, "gg3j{");
     // Then: the start of the list comes back to the top
     assert_eq!(first_row(&mut viewer), " • one");
+}
+
+/// t opens the contents beside the page, indented by level, with a marker on the section in view.
+///
+/// Why it matters: the contents is how a reader sees where they are in a long page, so a marker
+/// that does not follow the scroll or a reload points them at the wrong section.
+#[test]
+fn shows_the_contents_beside_the_page_and_marks_the_section_in_view() {
+    // Given: headings at three levels, then enough text to scroll, on a wide screen
+    let filler: String = (1..=8).map(|n| format!("filler {n}\n\n")).collect();
+    let markdown = format!(
+        "# Guide\n\nintro\n\n## Install\n\ntext\n\n### Flags\n\ntext\n\n## Usage\n\n{filler}"
+    );
+    let mut viewer = Viewer::new("doc.md", &markdown);
+    draw(&mut viewer, 80, 12);
+
+    // When: the reader presses t
+    type_keys(&mut viewer, "t");
+    let buffer = draw(&mut viewer, 80, 12);
+    let panel = columns(&buffer, 0, 30);
+
+    // Then: the panel lists the headings under its title, indented by level, marking the first
+    assert!(panel[0].starts_with("┌ Contents "));
+    assert_eq!(
+        panel[1..6],
+        [
+            entry(" Guide", true),
+            entry("   Install", false),
+            entry("     Flags", false),
+            entry("   Usage", false),
+            entry("", false),
+        ]
+    );
+    // And: the page moves right of the panel
+    assert_eq!(find(&buffer, "intro"), (31, 3));
+
+    // When: the reader jumps two sections on and scrolls one line into the section
+    type_keys(&mut viewer, "2]]j");
+    // Then: the marker follows to that section
+    let panel = columns(&draw(&mut viewer, 80, 12), 0, 30);
+    assert_eq!(
+        panel[2..4],
+        [entry("   Install", false), entry("     Flags", true)]
+    );
+
+    // When: the file gains a paragraph above
+    viewer.reload(&markdown.replace("intro\n\n", "intro\n\nadded\n\n"));
+    // Then: the marker stays on the section
+    let panel = columns(&draw(&mut viewer, 80, 12), 0, 30);
+    assert_eq!(panel[3], entry("     Flags", true));
+
+    // When: the reader presses t again
+    type_keys(&mut viewer, "t");
+    // Then: the panel closes and the page has the full width again
+    let buffer = draw(&mut viewer, 80, 12);
+    assert!(!rows(&buffer).iter().any(|row| row.contains("Contents")));
+    assert_eq!(find(&buffer, "Flags").0, 1);
+}
+
+/// A long contents scrolls to keep the marked entry in view, cuts long headings, and says when a
+/// page has no headings.
+///
+/// Why it matters: a marker scrolled out of the panel, or a heading that runs into the page, makes
+/// the contents unreadable on exactly the long pages that need it.
+#[test]
+fn keeps_the_marked_entry_in_view_and_cuts_long_headings() {
+    // Given: a long first heading, then 30 short sections, on a screen with 7 rows for entries
+    let title = "A heading far too long to fit in the panel";
+    let sections: String = (1..=30)
+        .map(|n| format!("## Section {n}\n\ntext\n\n"))
+        .collect();
+    let mut viewer = Viewer::new("doc.md", &format!("## {title}\n\n{sections}"));
+    draw(&mut viewer, 80, 10);
+    type_keys(&mut viewer, "t");
+
+    // Then: the long heading is cut to the panel with an ellipsis
+    let panel = columns(&draw(&mut viewer, 80, 10), 0, 30);
+    assert_eq!(panel[1], entry(&format!(" {}…", &title[..25]), true));
+
+    // When: the reader goes to the end
+    type_keys(&mut viewer, "G");
+    // Then: the panel scrolls to its last entries, marking Section 29, whose heading is the top
+    // line, and the first entry has scrolled away
+    let panel = columns(&draw(&mut viewer, 80, 10), 0, 30);
+    assert_eq!(
+        panel[6..8],
+        [entry(" Section 29", true), entry(" Section 30", false)]
+    );
+    assert!(!panel.iter().any(|row| row.contains("A heading")));
+
+    // And: a page with no headings says so
+    let mut plain = Viewer::new("doc.md", "just text\n");
+    type_keys(&mut plain, "t");
+    let panel = columns(&draw(&mut plain, 80, 10), 0, 30);
+    assert_eq!(panel[1], entry(" No headings", false));
+}
+
+/// On a narrow screen the contents covers the left of the page instead of squeezing the text.
+///
+/// Why it matters: text squeezed below 40 columns wraps every few words and is hard to read, and a
+/// reflow there moves the reader's place each time the panel opens.
+#[test]
+fn covers_the_page_on_a_narrow_screen() {
+    // Given: a paragraph that wraps on a 60-column screen
+    let markdown = format!("# Title\n\n{}\n", "word ".repeat(30));
+    let mut viewer = Viewer::new("doc.md", &markdown);
+    let before = columns(&draw(&mut viewer, 60, 8), 30, 60);
+
+    // When: the reader presses t
+    type_keys(&mut viewer, "t");
+    let buffer = draw(&mut viewer, 60, 8);
+
+    // Then: the panel shows on the left, and the page beside it is laid out as before
+    assert!(columns(&buffer, 0, 30)[0].starts_with("┌ Contents "));
+    assert_eq!(columns(&buffer, 30, 60), before);
 }
 
 /// The quit keys end the viewer, and other keys keep it open.
