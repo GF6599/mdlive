@@ -919,6 +919,79 @@ fn keeps_dollar_ratings_in_tables_and_math_in_headings() {
     assert_eq!(screen[8], " Fit x² here");
 }
 
+/// Front matter shows as a muted table of keys and values above the page.
+///
+/// Why it matters: raw front matter reads as a heading and a paragraph of YAML, which puts the
+/// metadata in front of the text as if it were the first section.
+#[test]
+fn shows_front_matter_as_keys_and_values() {
+    // Given: front matter with a long value and a list, then a heading
+    let markdown = "---\ntitle: Notes\ndescription: A long description that wraps past the width\ntags: [rust, tui]\n---\n\n# Body\n";
+
+    // When: it is drawn with 38 columns for text
+    let buffer = draw(&mut Viewer::new("doc.md", markdown), 40, 10);
+
+    // Then: keys and values line up in two columns, the long value wraps under itself, and the
+    // page follows after a blank line
+    assert_eq!(
+        body(&buffer)[..6],
+        [
+            " title        Notes",
+            " description  A long description that",
+            "              wraps past the width",
+            " tags         rust, tui",
+            "",
+            " Body",
+        ]
+    );
+    assert_eq!(buffer[find(&buffer, "title")].fg, theme::MUTED);
+    assert_eq!(buffer[find(&buffer, "Notes")].fg, theme::SUBTLE);
+}
+
+/// A list written as indented items joins with commas, and a quoted value loses its quotes.
+///
+/// Why it matters: both are common YAML spellings of the same data, and showing their syntax makes
+/// one page's metadata read differently from another's.
+#[test]
+fn joins_block_lists_and_unquotes_values_in_front_matter() {
+    // Given: front matter with an indented list and a quoted value holding a colon
+    let markdown = "---\nauthors:\n  - Ada\n  - Linus\nsummary: \"Quoted: value\"\n---\nText\n";
+
+    // When: it is drawn
+    let screen = shown(markdown, 40, 6);
+
+    // Then: the list reads as one value, and the quotes are gone
+    assert_eq!(
+        screen[..4],
+        [
+            " authors  Ada, Linus",
+            " summary  Quoted: value",
+            "",
+            " Text"
+        ]
+    );
+}
+
+/// Front matter this viewer cannot read as keys and values shows as its source.
+///
+/// Why it matters: a nested map flattened into a table would show values under the wrong keys,
+/// while the source is at least what the author wrote.
+#[test]
+fn shows_front_matter_it_cannot_read_as_source() {
+    // Given: front matter with a nested map
+    let markdown = "---\nnested:\n  key: value\n---\nText\n";
+
+    // When: it is drawn
+    let buffer = draw(&mut Viewer::new("doc.md", markdown), 40, 8);
+
+    // Then: the block shows as written, in the muted source colour
+    assert_eq!(
+        body(&buffer)[..6],
+        [" ---", " nested:", "   key: value", " ---", "", " Text"]
+    );
+    assert_eq!(buffer[find(&buffer, "nested")].fg, theme::MUTED);
+}
+
 /// The quit keys end the viewer, and other keys keep it open.
 ///
 /// Why it matters: a viewer that ignores q traps the reader in the terminal.

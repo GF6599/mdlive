@@ -1,12 +1,14 @@
 use std::ops::Range;
 
 use pulldown_cmark::{
-    Alignment, BlockQuoteKind, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
+    Alignment, BlockQuoteKind, CodeBlockKind, Event, HeadingLevel, MetadataBlockKind, Options,
+    Parser, Tag, TagEnd,
 };
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
+use crate::front_matter;
 use crate::highlight::highlight;
 use crate::math::to_unicode;
 use crate::table::{self, Cell};
@@ -169,6 +171,9 @@ enum Block {
     Raw {
         text: String,
     },
+    FrontMatter {
+        text: String,
+    },
     Table {
         alignments: Vec<Alignment>,
         rows: Vec<Vec<Cell>>,
@@ -219,7 +224,8 @@ impl Builder {
             | Options::ENABLE_TASKLISTS
             | Options::ENABLE_FOOTNOTES
             | Options::ENABLE_GFM
-            | Options::ENABLE_MATH;
+            | Options::ENABLE_MATH
+            | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS;
         let mut footnote: Option<Footnote> = None;
         for (event, range) in Parser::new_ext(markdown, options).into_offset_iter() {
             let event = match event {
@@ -416,6 +422,12 @@ impl Builder {
                     shown: false,
                 });
             }
+            Tag::MetadataBlock(MetadataBlockKind::YamlStyle) => self.open(
+                Block::FrontMatter {
+                    text: String::new(),
+                },
+                range.start,
+            ),
             Tag::Table(alignments) => self.open(
                 Block::Table {
                     alignments,
@@ -449,6 +461,7 @@ impl Builder {
             | TagEnd::Heading(_)
             | TagEnd::CodeBlock
             | TagEnd::HtmlBlock
+            | TagEnd::MetadataBlock(_)
             | TagEnd::Table => {
                 self.finish_block();
                 self.gap = true;
@@ -503,7 +516,9 @@ impl Builder {
     fn text(&mut self, text: &str, range: Range<usize>) {
         match &mut self.block {
             Some((Block::Code { text: code, .. }, _)) => code.push_str(text),
-            Some((Block::Raw { text: raw }, _)) => raw.push_str(text),
+            Some((Block::Raw { text: raw } | Block::FrontMatter { text: raw }, _)) => {
+                raw.push_str(text);
+            }
             _ => self.inline(text, range, Style::new()),
         }
     }
@@ -577,14 +592,39 @@ impl Builder {
                     self.push_line(row, index == 0, line);
                 }
             }
-            Block::Raw { text } => {
-                let mut first = true;
-                for row in text.trim_end_matches('\n').lines() {
-                    for part in hard_wrap(&[Span::styled(row.to_string(), theme::html())], width) {
-                        self.push_line(part, first, line);
-                        first = false;
-                    }
-                }
+            Block::Raw { text } => self.push_source(&text, width, line),
+            Block::FrontMatter { text } => match front_matter::parse(&text) {
+                Some(pairs) => self.push_front_matter(&pairs, width, line),
+                None => self.push_source(&format!("---\n{text}---"), width, line),
+            },
+        }
+    }
+
+    fn push_source(&mut self, text: &str, width: usize, line: usize) {
+        let mut first = true;
+        for row in text.trim_end_matches('\n').lines() {
+            for part in hard_wrap(&[Span::styled(row.to_string(), theme::html())], width) {
+                self.push_line(part, first, line);
+                first = false;
+            }
+        }
+    }
+
+    /// Keys in one column and values beside them, a long value wrapping under itself.
+    fn push_front_matter(&mut self, pairs: &[(String, String)], width: usize, line: usize) {
+        let key_width = pairs.iter().map(|(key, _)| key.width()).max().unwrap_or(0) + 2;
+        let value_width = width.saturating_sub(key_width).max(1);
+        for (key, value) in pairs {
+            let value = [Span::styled(value.clone(), theme::front_matter_value())];
+            for (index, row) in wrap(&value, value_width).into_iter().enumerate() {
+                let lead = if index == 0 { key.as_str() } else { "" };
+                let pad = " ".repeat(key_width - lead.width());
+                let mut spans = vec![Span::styled(
+                    format!("{lead}{pad}"),
+                    theme::front_matter_key(),
+                )];
+                spans.extend(row);
+                self.push_line(spans, index == 0, line);
             }
         }
     }

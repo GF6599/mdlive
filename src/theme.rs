@@ -139,3 +139,11 @@ pub fn search_match() -> Style {
 pub fn search_current() -> Style {
     Style::new().fg(BASE).bg(ROSE)
 }
+
+pub fn front_matter_key() -> Style {
+    Style::new().fg(MUTED)
+}
+
+pub fn front_matter_value() -> Style {
+    Style::new().fg(SUBTLE)
+}

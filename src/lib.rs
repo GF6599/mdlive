@@ -1,5 +1,6 @@
 mod contents;
 mod document;
+mod front_matter;
 mod highlight;
 mod keys;
 mod math;
