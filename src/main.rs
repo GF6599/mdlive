@@ -4,7 +4,8 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
-use mdlive::{Flow, Viewer, watch_file};
+use mdlive::{Flow, LinkArea, Viewer, hyperlink_cells, watch_file};
+use ratatui::backend::Backend;
 
 /// Long enough to fold the writes of one editor save into one reload, short enough to feel live.
 const DEBOUNCE: Duration = Duration::from_millis(100);
@@ -85,8 +86,16 @@ fn run(
     path: &Path,
     inputs: &Receiver<Input>,
 ) -> std::io::Result<()> {
+    let mut links: Vec<LinkArea> = Vec::new();
     loop {
-        terminal.draw(|frame| viewer.draw(frame))?;
+        let frame = terminal.draw(|frame| viewer.draw(frame))?;
+        let cells = hyperlink_cells(frame.buffer, viewer.links(), &links);
+        if !cells.is_empty() {
+            let backend = terminal.backend_mut();
+            backend.draw(cells.iter().map(|(x, y, cell)| (*x, *y, cell)))?;
+            Backend::flush(backend)?;
+        }
+        links = viewer.links().to_vec();
         let Ok(input) = inputs.recv() else {
             return Ok(());
         };

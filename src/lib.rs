@@ -3,6 +3,7 @@ mod document;
 mod folds;
 mod front_matter;
 mod highlight;
+mod hyperlink;
 mod keys;
 mod math;
 mod search;
@@ -20,6 +21,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::document::Document;
 use crate::folds::Folds;
+pub use crate::hyperlink::{LinkArea, hyperlink_cells};
 use crate::keys::{Command, KeyReader};
 use crate::search::{Match, find_all};
 pub use crate::watch::{FileWatch, watch_file};
@@ -59,6 +61,7 @@ pub struct Viewer {
     current_match: Option<Match>,
     /// A note on the last search, such as a wrap at the end of the page.
     notice: Option<(String, Style)>,
+    links: Vec<LinkArea>,
 }
 
 impl Viewer {
@@ -78,6 +81,7 @@ impl Viewer {
             search: None,
             current_match: None,
             notice: None,
+            links: Vec::new(),
         }
     }
 
@@ -119,6 +123,7 @@ impl Viewer {
             .collect();
         frame.render_widget(Paragraph::new(lines), text);
         self.mark_matches(frame, text);
+        self.links = self.links_on_screen(text, panel);
         if let Some(panel) = panel {
             let current = self.document.heading_at(self.top);
             contents::draw(frame, panel, self.document.headings(), current);
@@ -143,6 +148,39 @@ impl Viewer {
             Paragraph::new(format!("{pending}{gap}{}% ", self.percent())).right_aligned(),
             status,
         );
+    }
+
+    /// The links drawn in the last frame, for the terminal to open on a click.
+    pub fn links(&self) -> &[LinkArea] {
+        &self.links
+    }
+
+    /// The links in view, cut where the contents panel covers the page.
+    fn links_on_screen(&self, text: Rect, panel: Option<Rect>) -> Vec<LinkArea> {
+        let rows = self.top..self.top + usize::from(text.height);
+        self.document
+            .links()
+            .iter()
+            .filter(|link| rows.contains(&link.line))
+            .filter_map(|link| {
+                let x = text.x.checked_add(u16::try_from(link.column).ok()?)?;
+                let right = x.checked_add(u16::try_from(link.width).ok()?)?;
+                let y = text
+                    .y
+                    .checked_add(u16::try_from(link.line - self.top).ok()?)?;
+                let x = panel.map_or(x, |panel| x.max(panel.right()));
+                (x < right).then(|| LinkArea {
+                    area: Rect {
+                        x,
+                        y,
+                        width: right - x,
+                        height: 1,
+                    },
+                    id: link.url,
+                    url: self.document.url(link).to_string(),
+                })
+            })
+            .collect()
     }
 
     /// Shows new file contents, keeping the reader under the same heading.

@@ -12,10 +12,11 @@ use unicode_width::UnicodeWidthStr;
 use crate::folds::{DetailsTag, Folds, details_tags};
 use crate::front_matter;
 use crate::highlight::highlight;
+use crate::hyperlink::is_openable;
 use crate::math::to_unicode;
 use crate::table::{self, Cell};
 use crate::theme;
-use crate::wrap::{BREAK, hard_wrap, wrap};
+use crate::wrap::{BREAK, Run, hard_wrap, wrap, wrap_runs};
 
 const BULLET: &str = "• ";
 const QUOTE_BAR: &str = "▎ ";
@@ -38,6 +39,19 @@ pub struct Document {
     /// A tight list has no blank line between its items, so it is one block, as in vim.
     blocks: Vec<usize>,
     folds: Vec<Fold>,
+    links: Vec<Link>,
+    urls: Vec<String>,
+}
+
+/// The text of one link on one screen line.
+#[derive(Debug)]
+pub struct Link {
+    pub line: usize,
+    pub column: usize,
+    pub width: usize,
+    /// Each link has its own index, so the rows of a wrapped link share it and two links to the
+    /// same address do not.
+    pub url: usize,
 }
 
 /// The summary line of a details block.
@@ -71,6 +85,14 @@ impl Document {
 
     pub fn folds(&self) -> &[Fold] {
         &self.folds
+    }
+
+    pub fn links(&self) -> &[Link] {
+        &self.links
+    }
+
+    pub fn url(&self, link: &Link) -> &str {
+        self.urls.get(link.url).map_or("", String::as_str)
     }
 
     pub fn lines(&self) -> &[Line<'static>] {
@@ -175,11 +197,11 @@ enum Container {
 
 enum Block {
     Text {
-        spans: Vec<Span<'static>>,
+        spans: Vec<Run>,
         base: Style,
     },
     Heading {
-        spans: Vec<Span<'static>>,
+        spans: Vec<Run>,
         level: u8,
     },
     Code {
@@ -207,6 +229,8 @@ struct Builder {
     containers: Vec<Container>,
     lists: Vec<Option<u64>>,
     styles: Vec<Style>,
+    /// The link the parser is inside, when its address is one a terminal can open.
+    link: Option<usize>,
     block: Option<(Block, usize)>,
     gap: bool,
     starts_block: bool,
@@ -232,6 +256,7 @@ impl Builder {
             containers: Vec::new(),
             lists: Vec::new(),
             styles: Vec::new(),
+            link: None,
             block: None,
             gap: false,
             starts_block: true,
@@ -476,7 +501,13 @@ impl Builder {
             Tag::Emphasis => self.styles.push(theme::emphasis()),
             Tag::Strong => self.styles.push(theme::strong()),
             Tag::Strikethrough => self.styles.push(theme::strikethrough()),
-            Tag::Link { .. } => self.styles.push(theme::link()),
+            Tag::Link { dest_url, .. } => {
+                self.styles.push(theme::link());
+                self.link = is_openable(&dest_url).then(|| {
+                    self.document.urls.push(dest_url.to_string());
+                    self.document.urls.len() - 1
+                });
+            }
             _ => {}
         }
     }
@@ -508,8 +539,12 @@ impl Builder {
                 self.finish_block();
                 self.containers.pop();
             }
-            TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
+            TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => {
                 self.styles.pop();
+            }
+            TagEnd::Link => {
+                self.styles.pop();
+                self.link = None;
             }
             _ => {}
         }
@@ -561,19 +596,20 @@ impl Builder {
             );
         }
         let style = self.style().patch(style);
+        let link = self.link;
         match &mut self.block {
             Some((Block::Text { spans, base }, _)) => {
-                spans.push(Span::styled(text.to_string(), base.patch(style)));
+                spans.push((Span::styled(text.to_string(), base.patch(style)), link));
             }
             Some((Block::Heading { spans, level }, _)) => {
-                spans.push(Span::styled(
-                    text.to_string(),
-                    theme::heading(*level).patch(style),
+                spans.push((
+                    Span::styled(text.to_string(), theme::heading(*level).patch(style)),
+                    link,
                 ));
             }
             Some((Block::Table { rows, .. }, _)) => {
                 if let Some(cell) = rows.last_mut().and_then(|row| row.last_mut()) {
-                    cell.push(Span::styled(text.to_string(), style));
+                    cell.push((Span::styled(text.to_string(), style), link));
                 }
             }
             _ => {}
@@ -611,7 +647,10 @@ impl Builder {
                 self.document.headings.push(Heading {
                     line: self.document.len(),
                     level,
-                    text: spans.iter().map(|span| span.content.as_ref()).collect(),
+                    text: spans
+                        .iter()
+                        .map(|(span, _)| span.content.as_ref())
+                        .collect(),
                 });
                 self.push_wrapped(&spans, width, line);
                 if let Some((glyph, style)) = theme::heading_rule(level) {
@@ -624,7 +663,7 @@ impl Builder {
                     .into_iter()
                     .enumerate()
                 {
-                    self.push_line(row, index == 0, line);
+                    self.push_runs(row, index == 0, line);
                 }
             }
             Block::Raw { text } => self.push_source(&text, width, line),
@@ -732,10 +771,42 @@ impl Builder {
         self.gap = true;
     }
 
-    fn push_wrapped(&mut self, spans: &[Span<'static>], width: usize, line: usize) {
-        for (index, row) in wrap(spans, width).into_iter().enumerate() {
-            self.push_line(row, index == 0, line);
+    fn push_wrapped(&mut self, runs: &[Run], width: usize, line: usize) {
+        for (index, row) in wrap_runs(runs, width).into_iter().enumerate() {
+            self.push_runs(row, index == 0, line);
         }
+    }
+
+    /// Adds a line and notes where the text of each link sits on it.
+    fn push_runs(&mut self, content: Vec<Run>, first: bool, source: usize) {
+        if self.hidden() {
+            return;
+        }
+        let line = self.document.len();
+        let mut column: usize = self.containers.iter().map(container_width).sum();
+        for (span, link) in &content {
+            let width = span.content.width();
+            if let Some(url) = *link {
+                match self.document.links.last_mut() {
+                    Some(last)
+                        if last.line == line
+                            && last.url == url
+                            && last.column + last.width == column =>
+                    {
+                        last.width += width;
+                    }
+                    _ => self.document.links.push(Link {
+                        line,
+                        column,
+                        width,
+                        url,
+                    }),
+                }
+            }
+            column += width;
+        }
+        let spans = content.into_iter().map(|(span, _)| span).collect();
+        self.push_line(spans, first, source);
     }
 
     /// A code block keeps its own line breaks and sits on a filled panel, padded by one column

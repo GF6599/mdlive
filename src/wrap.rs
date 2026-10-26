@@ -5,33 +5,41 @@ use unicode_width::UnicodeWidthStr;
 
 pub const BREAK: &str = "\n";
 
+/// A span of text and the index of the link it belongs to, so a link can be found again on the
+/// rows it wraps onto.
+pub type Run = (Span<'static>, Option<usize>);
+
+/// What two pieces of text must share to join into one span.
+type Key = (Style, Option<usize>);
+
 enum Token {
-    Word(Vec<(String, Style)>),
-    Space(Style),
+    Word(Vec<(String, Key)>),
+    Space(Key),
     Break,
 }
 
 /// A word is everything between two spaces, so `**bo**ld` stays one word across its two styles.
-fn tokens(spans: &[Span<'static>]) -> Vec<Token> {
+fn tokens(runs: &[Run]) -> Vec<Token> {
     let mut tokens = Vec::new();
-    let mut word: Vec<(String, Style)> = Vec::new();
-    let flush = |word: &mut Vec<(String, Style)>, tokens: &mut Vec<Token>| {
+    let mut word: Vec<(String, Key)> = Vec::new();
+    let flush = |word: &mut Vec<(String, Key)>, tokens: &mut Vec<Token>| {
         if !word.is_empty() {
             tokens.push(Token::Word(std::mem::take(word)));
         }
     };
-    for span in spans {
+    for (span, link) in runs {
+        let key = (span.style, *link);
         for grapheme in span.content.graphemes(true) {
             if grapheme == BREAK {
                 flush(&mut word, &mut tokens);
                 tokens.push(Token::Break);
             } else if grapheme.chars().all(char::is_whitespace) {
                 flush(&mut word, &mut tokens);
-                tokens.push(Token::Space(span.style));
+                tokens.push(Token::Space(key));
             } else {
                 match word.last_mut() {
-                    Some((text, style)) if *style == span.style => text.push_str(grapheme),
-                    _ => word.push((grapheme.to_string(), span.style)),
+                    Some((text, last)) if *last == key => text.push_str(grapheme),
+                    _ => word.push((grapheme.to_string(), key)),
                 }
             }
         }
@@ -42,17 +50,21 @@ fn tokens(spans: &[Span<'static>]) -> Vec<Token> {
 
 #[derive(Default)]
 struct Lines {
-    done: Vec<Vec<Span<'static>>>,
-    line: Vec<Span<'static>>,
+    done: Vec<Vec<Run>>,
+    line: Vec<Run>,
     used: usize,
 }
 
 impl Lines {
-    fn push(&mut self, text: &str, style: Style) {
+    fn push(&mut self, text: &str, (style, link): Key) {
         self.used += text.width();
         match self.line.last_mut() {
-            Some(last) if last.style == style => last.content.to_mut().push_str(text),
-            _ => self.line.push(Span::styled(text.to_string(), style)),
+            Some((last, last_link)) if last.style == style && *last_link == link => {
+                last.content.to_mut().push_str(text);
+            }
+            _ => self
+                .line
+                .push((Span::styled(text.to_string(), style), link)),
         }
     }
 
@@ -61,24 +73,32 @@ impl Lines {
         self.used = 0;
     }
 
-    fn push_split(&mut self, word: &[(String, Style)], width: usize) {
-        for (text, style) in word {
+    fn push_split(&mut self, word: &[(String, Key)], width: usize) {
+        for (text, key) in word {
             for grapheme in text.graphemes(true) {
                 if self.used + grapheme.width() > width && self.used > 0 {
                     self.end_line();
                 }
-                self.push(grapheme, *style);
+                self.push(grapheme, *key);
             }
         }
     }
 }
 
+pub fn wrap(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> {
+    let runs: Vec<Run> = spans.iter().map(|span| (span.clone(), None)).collect();
+    wrap_runs(&runs, width)
+        .into_iter()
+        .map(|row| row.into_iter().map(|(span, _)| span).collect())
+        .collect()
+}
+
 /// Wraps styled text at spaces to fit `width` display columns, and splits only a word wider
 /// than a line. Runs of spaces collapse to one, and no line starts with a space.
-pub fn wrap(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> {
+pub fn wrap_runs(runs: &[Run], width: usize) -> Vec<Vec<Run>> {
     let mut lines = Lines::default();
-    let mut space: Option<Style> = None;
-    for token in tokens(spans) {
+    let mut space: Option<Key> = None;
+    for token in tokens(runs) {
         match token {
             Token::Space(style) => space = Some(style),
             Token::Break => {
@@ -90,12 +110,12 @@ pub fn wrap(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> {
                 let gap = usize::from(space.is_some() && lines.used > 0);
                 if lines.used + gap + word_width <= width {
                     if gap == 1
-                        && let Some(style) = space
+                        && let Some(key) = space
                     {
-                        lines.push(" ", style);
+                        lines.push(" ", key);
                     }
-                    for (text, style) in &word {
-                        lines.push(text, *style);
+                    for (text, key) in &word {
+                        lines.push(text, *key);
                     }
                 } else {
                     if lines.used > 0 {
@@ -121,9 +141,13 @@ pub fn hard_wrap(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>
             if lines.used + grapheme.width() > width && lines.used > 0 {
                 lines.end_line();
             }
-            lines.push(grapheme, span.style);
+            lines.push(grapheme, (span.style, None));
         }
     }
     lines.end_line();
-    lines.done
+    lines
+        .done
+        .into_iter()
+        .map(|row| row.into_iter().map(|(span, _)| span).collect())
+        .collect()
 }
