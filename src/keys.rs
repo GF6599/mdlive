@@ -11,6 +11,10 @@ pub enum Command {
     PageUp(usize),
     Top,
     End,
+    NextHeading(usize),
+    PreviousHeading(usize),
+    NextBlock(usize),
+    PreviousBlock(usize),
     /// A line of the Markdown source, counted from 1 as an editor counts it.
     SourceLine(usize),
 }
@@ -35,8 +39,11 @@ impl KeyReader {
         }
         if let Some(prefix) = self.prefix.take() {
             let count = self.count.take();
+            let times = count.unwrap_or(1);
             return match (prefix, key.code) {
                 ('g', KeyCode::Char('g')) => Some(count.map_or(Command::Top, Command::SourceLine)),
+                (']', KeyCode::Char(']')) => Some(Command::NextHeading(times)),
+                ('[', KeyCode::Char('[')) => Some(Command::PreviousHeading(times)),
                 _ => None,
             };
         }
@@ -70,11 +77,13 @@ impl KeyReader {
             KeyCode::Char(' ') | KeyCode::PageDown => Some(Command::PageDown(times)),
             KeyCode::Char('b') if control => Some(Command::PageUp(times)),
             KeyCode::PageUp => Some(Command::PageUp(times)),
-            KeyCode::Char('g') if !control => {
+            KeyCode::Char(prefix @ ('g' | ']' | '[')) if !control => {
                 self.count = count;
-                self.prefix = Some('g');
+                self.prefix = Some(prefix);
                 None
             }
+            KeyCode::Char('}') => Some(Command::NextBlock(times)),
+            KeyCode::Char('{') => Some(Command::PreviousBlock(times)),
             KeyCode::Char('G') if !control => Some(count.map_or(Command::End, Command::SourceLine)),
             KeyCode::Home => Some(Command::Top),
             KeyCode::End => Some(Command::End),

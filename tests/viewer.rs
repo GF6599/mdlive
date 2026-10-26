@@ -418,6 +418,78 @@ fn shows_pending_keys_and_clears_them_on_escape() {
     assert_eq!(press(&mut viewer, KeyCode::Esc), Flow::Quit);
 }
 
+/// ]] and [[ put the next or previous heading at the top, as vim's section motions do.
+///
+/// Why it matters: a reader skims a long page by its sections, and a jump that lands one line off
+/// hides the heading it was meant to show.
+#[test]
+fn jumps_between_headings_with_the_section_keys() {
+    // Given: three sections, then enough text that every heading can reach the top
+    let filler: String = (1..=8).map(|n| format!("filler {n}\n\n")).collect();
+    let markdown =
+        format!("intro\n\n## Two\n\ntwo text\n\n## Three\n\nthree text\n\n## Four\n\n{filler}");
+    let mut viewer = Viewer::new("doc.md", &markdown);
+    let first_row = |viewer: &mut Viewer| body(&draw(viewer, 30, 6))[0].clone();
+    draw(&mut viewer, 30, 6);
+
+    // When: the reader types ]], then 2]]
+    type_keys(&mut viewer, "]]");
+    // Then: the next heading is at the top, then the one two further on
+    assert_eq!(first_row(&mut viewer), " Two");
+    type_keys(&mut viewer, "2]]");
+    assert_eq!(first_row(&mut viewer), " Four");
+
+    // When: the reader scrolls into the section, then types [[
+    type_keys(&mut viewer, "3j[[");
+    // Then: the heading of the section the reader is in comes back to the top
+    assert_eq!(first_row(&mut viewer), " Four");
+
+    // When: the reader types [[ again, then 5[[
+    type_keys(&mut viewer, "[[");
+    assert_eq!(first_row(&mut viewer), " Three");
+    type_keys(&mut viewer, "5[[");
+    // Then: with no heading left above, the page goes to the top, as vim does
+    assert_eq!(first_row(&mut viewer), " intro");
+
+    // When: the reader types 9]]
+    type_keys(&mut viewer, "9]]");
+    // Then: with no heading left below, the page goes to the end
+    assert!(status(&draw(&mut viewer, 30, 6)).ends_with("100%"));
+}
+
+/// } and { move by the blocks that a blank line separates, so a tight list is one block.
+///
+/// Why it matters: vim's paragraph motion stops at blank lines, and a reader who skips a list
+/// expects to land after it, not on its second item.
+#[test]
+fn jumps_between_blocks_with_the_paragraph_keys() {
+    // Given: a paragraph, a tight list, two more paragraphs, then enough text to scroll
+    let filler: String = (1..=8).map(|n| format!("filler {n}\n\n")).collect();
+    let markdown = format!("first\n\n- one\n- two\n- three\n\nsecond\n\nthird\n\n{filler}");
+    let mut viewer = Viewer::new("doc.md", &markdown);
+    let first_row = |viewer: &mut Viewer| body(&draw(viewer, 30, 6))[0].clone();
+    draw(&mut viewer, 30, 6);
+
+    // When: the reader types }, then } again
+    type_keys(&mut viewer, "}");
+    // Then: the list is at the top, then the paragraph after the whole list
+    assert_eq!(first_row(&mut viewer), " • one");
+    type_keys(&mut viewer, "}");
+    assert_eq!(first_row(&mut viewer), " second");
+
+    // When: the reader types 2}, then {
+    type_keys(&mut viewer, "2}");
+    assert_eq!(first_row(&mut viewer), " filler 1");
+    type_keys(&mut viewer, "{");
+    // Then: the block before is at the top
+    assert_eq!(first_row(&mut viewer), " third");
+
+    // When: the reader scrolls into the list, then types {
+    type_keys(&mut viewer, "gg3j{");
+    // Then: the start of the list comes back to the top
+    assert_eq!(first_row(&mut viewer), " • one");
+}
+
 /// The quit keys end the viewer, and other keys keep it open.
 ///
 /// Why it matters: a viewer that ignores q traps the reader in the terminal.

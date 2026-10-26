@@ -27,6 +27,9 @@ pub struct Document {
     /// source line of the block above it, so a position never anchors to a gap.
     sources: Vec<usize>,
     headings: Vec<Heading>,
+    /// The first screen line after each blank line between blocks, and the first line of the page.
+    /// A tight list has no blank line between its items, so it is one block, as in vim.
+    blocks: Vec<usize>,
 }
 
 #[derive(Debug)]
@@ -103,12 +106,36 @@ impl Document {
             .unwrap_or_else(|| self.screen_line_of(anchor.source_line))
     }
 
+    pub fn next_heading(&self, after: usize) -> Option<usize> {
+        next(self.headings.iter().map(|heading| heading.line), after)
+    }
+
+    pub fn previous_heading(&self, before: usize) -> Option<usize> {
+        previous(self.headings.iter().map(|heading| heading.line), before)
+    }
+
+    pub fn next_block(&self, after: usize) -> Option<usize> {
+        next(self.blocks.iter().copied(), after)
+    }
+
+    pub fn previous_block(&self, before: usize) -> Option<usize> {
+        previous(self.blocks.iter().copied(), before)
+    }
+
     /// The first screen line of the block that holds `source_line`.
     pub fn screen_line_of(&self, source_line: usize) -> usize {
         let after = self.sources.partition_point(|&line| line <= source_line);
         let block = self.sources[..after].last().copied().unwrap_or(0);
         self.sources.partition_point(|&line| line < block)
     }
+}
+
+fn next(mut lines: impl Iterator<Item = usize>, after: usize) -> Option<usize> {
+    lines.find(|&line| line > after)
+}
+
+fn previous(lines: impl Iterator<Item = usize>, before: usize) -> Option<usize> {
+    lines.take_while(|&line| line < before).last()
 }
 
 #[derive(Debug)]
@@ -150,6 +177,7 @@ struct Builder {
     styles: Vec<Style>,
     block: Option<(Block, usize)>,
     gap: bool,
+    starts_block: bool,
     /// Footnote labels in the order the text first refers to them, which gives their numbers.
     footnote_order: Vec<String>,
     /// Each footnote's events, held back so the notes can be drawn at the end of the page.
@@ -170,6 +198,7 @@ impl Builder {
             styles: Vec::new(),
             block: None,
             gap: false,
+            starts_block: true,
             footnote_order: Vec::new(),
             footnotes: Vec::new(),
         }
@@ -568,6 +597,7 @@ impl Builder {
         if self.gap && !self.document.is_empty() {
             let line = self.document.sources.last().copied().unwrap_or(0);
             self.push_line(Vec::new(), false, line);
+            self.starts_block = true;
         }
         self.gap = false;
     }
@@ -593,6 +623,9 @@ impl Builder {
         // The notes sit at the end of the page but may be defined anywhere, and a source line
         // that steps back would break the search that maps source lines to screen lines.
         let source = source.max(self.document.sources.last().copied().unwrap_or(0));
+        if std::mem::take(&mut self.starts_block) {
+            self.document.blocks.push(self.document.len());
+        }
         self.document.lines.push(Line::from(spans));
         self.document.sources.push(source);
     }

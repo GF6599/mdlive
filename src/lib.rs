@@ -133,8 +133,43 @@ impl Viewer {
             Command::SourceLine(line) => {
                 self.scroll_to(self.document.screen_line_of(line.saturating_sub(1)));
             }
+            Command::NextHeading(times) => {
+                self.jump(times, usize::MAX, |document, top| {
+                    document.next_heading(top)
+                });
+            }
+            Command::PreviousHeading(times) => {
+                self.jump(times, 0, |document, top| document.previous_heading(top));
+            }
+            Command::NextBlock(times) => {
+                self.jump(times, usize::MAX, |document, top| document.next_block(top));
+            }
+            Command::PreviousBlock(times) => {
+                self.jump(times, 0, |document, top| document.previous_block(top));
+            }
         }
         Flow::Continue
+    }
+
+    /// Steps `times` targets from the top line, and goes to `beyond` when the targets run out, as
+    /// vim goes to the first or last line.
+    fn jump(
+        &mut self,
+        times: usize,
+        beyond: usize,
+        step: impl Fn(&Document, usize) -> Option<usize>,
+    ) {
+        let mut top = self.top;
+        for _ in 0..times {
+            match step(&self.document, top) {
+                Some(line) => top = line,
+                None => {
+                    top = beyond;
+                    break;
+                }
+            }
+        }
+        self.scroll_to(top);
     }
 
     /// Lays the text out again when the width changes, keeping the block at the top in place.
