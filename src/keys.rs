@@ -29,6 +29,9 @@ pub enum Command {
     Search {
         forward: bool,
     },
+    ToggleFold,
+    OpenAllFolds,
+    CloseAllFolds,
     RepeatSearch {
         reverse: bool,
         times: usize,
@@ -79,6 +82,9 @@ impl KeyReader {
                 ('g', KeyCode::Char('g')) => Some(count.map_or(Command::Top, Command::SourceLine)),
                 (']', KeyCode::Char(']')) => Some(Command::NextHeading(times)),
                 ('[', KeyCode::Char('[')) => Some(Command::PreviousHeading(times)),
+                ('z', KeyCode::Char('a')) => Some(Command::ToggleFold),
+                ('z', KeyCode::Char('R')) => Some(Command::OpenAllFolds),
+                ('z', KeyCode::Char('M')) => Some(Command::CloseAllFolds),
                 (first, KeyCode::Char(second)) => self.hint(&format!("{first}{second}")),
                 _ => None,
             };
@@ -137,7 +143,7 @@ impl KeyReader {
             KeyCode::Char(' ') | KeyCode::PageDown => Some(Command::PageDown(times)),
             KeyCode::Char('b') if control => Some(Command::PageUp(times)),
             KeyCode::PageUp => Some(Command::PageUp(times)),
-            KeyCode::Char(prefix @ ('g' | ']' | '[')) if !control => {
+            KeyCode::Char(prefix @ ('g' | ']' | '[' | 'z')) if !control => {
                 self.count = count;
                 self.prefix = Some(prefix);
                 None

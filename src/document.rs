@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::ops::Range;
 
 use pulldown_cmark::{
@@ -8,6 +9,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
+use crate::folds::{DetailsTag, Folds, details_tags};
 use crate::front_matter;
 use crate::highlight::highlight;
 use crate::math::to_unicode;
@@ -20,6 +22,8 @@ const QUOTE_BAR: &str = "▎ ";
 const TAB: &str = "    ";
 const OPEN_TASK: &str = "☐ ";
 const DONE_TASK: &str = "☑ ";
+const FOLD_CLOSED: &str = "▸ ";
+const FOLD_OPEN: &str = "▾ ";
 const SUPERSCRIPT_DIGITS: [char; 10] = ['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'];
 
 /// A Markdown source laid out for one text width.
@@ -33,6 +37,16 @@ pub struct Document {
     /// The first screen line after each blank line between blocks, and the first line of the page.
     /// A tight list has no blank line between its items, so it is one block, as in vim.
     blocks: Vec<usize>,
+    folds: Vec<Fold>,
+}
+
+/// The summary line of a details block.
+#[derive(Debug)]
+pub struct Fold {
+    pub line: usize,
+    pub summary: String,
+    pub occurrence: usize,
+    pub open: bool,
 }
 
 #[derive(Debug)]
@@ -51,8 +65,12 @@ pub struct Anchor {
 }
 
 impl Document {
-    pub fn render(markdown: &str, width: usize) -> Self {
-        Builder::new(markdown, width.max(1)).build(markdown)
+    pub fn render(markdown: &str, width: usize, folds: &Folds) -> Self {
+        Builder::new(markdown, width.max(1), folds.clone()).build(markdown)
+    }
+
+    pub fn folds(&self) -> &[Fold] {
+        &self.folds
     }
 
     pub fn lines(&self) -> &[Line<'static>] {
@@ -196,10 +214,14 @@ struct Builder {
     footnote_order: Vec<String>,
     /// Each footnote's events, held back so the notes can be drawn at the end of the page.
     footnotes: Vec<Footnote>,
+    fold_states: Folds,
+    /// Whether each details block the parser is inside is open.
+    open_folds: Vec<bool>,
+    summaries_seen: HashMap<String, usize>,
 }
 
 impl Builder {
-    fn new(markdown: &str, width: usize) -> Self {
+    fn new(markdown: &str, width: usize, fold_states: Folds) -> Self {
         let line_starts = std::iter::once(0)
             .chain(markdown.match_indices('\n').map(|(at, _)| at + 1))
             .collect();
@@ -215,6 +237,9 @@ impl Builder {
             starts_block: true,
             footnote_order: Vec::new(),
             footnotes: Vec::new(),
+            fold_states,
+            open_folds: Vec::new(),
+            summaries_seen: HashMap::new(),
         }
     }
 
@@ -252,6 +277,7 @@ impl Builder {
             }
         }
         self.finish_block();
+        self.open_folds.clear();
         self.push_footnotes();
         self.document
     }
@@ -568,6 +594,15 @@ impl Builder {
         {
             return;
         }
+        if let Block::Raw { text } = &block
+            && let Some(tags) = details_tags(text)
+        {
+            self.fold(tags, line);
+            return;
+        }
+        if self.hidden() {
+            return;
+        }
         self.blank_before_block();
         let width = self.content_width();
         match block {
@@ -597,6 +632,45 @@ impl Builder {
                 Some(pairs) => self.push_front_matter(&pairs, width, line),
                 None => self.push_source(&format!("---\n{text}---"), width, line),
             },
+        }
+    }
+
+    fn hidden(&self) -> bool {
+        self.open_folds.iter().any(|open| !open)
+    }
+
+    /// Shows the summary line of each details block that starts, unless an enclosing fold is
+    /// closed, and hides what follows until the block ends when the fold is closed.
+    fn fold(&mut self, tags: Vec<DetailsTag>, line: usize) {
+        for tag in tags {
+            match tag {
+                DetailsTag::Start { open, summary } => {
+                    let seen = self.summaries_seen.entry(summary.clone()).or_default();
+                    let occurrence = *seen;
+                    *seen += 1;
+                    let open = self.fold_states.is_open(&summary, occurrence, open);
+                    if !self.hidden() {
+                        self.blank_before_block();
+                        let marker = if open { FOLD_OPEN } else { FOLD_CLOSED };
+                        self.document.folds.push(Fold {
+                            line: self.document.len(),
+                            summary: summary.clone(),
+                            occurrence,
+                            open,
+                        });
+                        let spans = vec![
+                            Span::styled(marker, theme::marker()),
+                            Span::styled(summary, theme::strong()),
+                        ];
+                        self.push_line(spans, true, line);
+                        self.gap = true;
+                    }
+                    self.open_folds.push(open);
+                }
+                DetailsTag::End => {
+                    self.open_folds.pop();
+                }
+            }
         }
     }
 
@@ -712,6 +786,9 @@ impl Builder {
     }
 
     fn push_line(&mut self, content: Vec<Span<'static>>, first: bool, source: usize) {
+        if self.hidden() {
+            return;
+        }
         let mut spans = Vec::new();
         for container in &mut self.containers {
             match container {

@@ -1,5 +1,6 @@
 mod contents;
 mod document;
+mod folds;
 mod front_matter;
 mod highlight;
 mod keys;
@@ -18,6 +19,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::document::Document;
+use crate::folds::Folds;
 use crate::keys::{Command, KeyReader};
 use crate::search::{Match, find_all};
 pub use crate::watch::{FileWatch, watch_file};
@@ -50,6 +52,7 @@ pub struct Viewer {
     error: Option<String>,
     keys: KeyReader,
     contents_open: bool,
+    folds: Folds,
     /// The search being typed in the status line.
     prompt: Option<Search>,
     search: Option<Search>,
@@ -70,6 +73,7 @@ impl Viewer {
             error: None,
             keys: KeyReader::default(),
             contents_open: false,
+            folds: Folds::default(),
             prompt: None,
             search: None,
             current_match: None,
@@ -145,9 +149,14 @@ impl Viewer {
     pub fn reload(&mut self, markdown: &str) {
         self.error = None;
         self.markdown = markdown.to_string();
+        self.render_in_place();
+    }
+
+    /// Renders the page again, keeping the reader under the same heading.
+    fn render_in_place(&mut self) {
         if let Some(width) = self.width {
             let anchor = self.document.anchor(self.top);
-            self.document = Document::render(&self.markdown, width);
+            self.document = Document::render(&self.markdown, width, &self.folds);
             self.current_match = None;
             self.top = self.document.screen_line_at(&anchor);
         }
@@ -183,6 +192,26 @@ impl Viewer {
                 });
             }
             Command::RepeatSearch { reverse, times } => self.step_search(reverse, times),
+            Command::ToggleFold => {
+                let bottom = self.top + self.page;
+                if let Some(fold) = self
+                    .document
+                    .folds()
+                    .iter()
+                    .find(|fold| (self.top..bottom).contains(&fold.line))
+                {
+                    self.folds.set(&fold.summary, fold.occurrence, !fold.open);
+                    self.render_in_place();
+                }
+            }
+            Command::OpenAllFolds => {
+                self.folds.set_all(true);
+                self.render_in_place();
+            }
+            Command::CloseAllFolds => {
+                self.folds.set_all(false);
+                self.render_in_place();
+            }
             Command::Heading(index) => {
                 if let Some(heading) = self.document.headings().get(index) {
                     self.scroll_to(heading.line);
@@ -353,7 +382,7 @@ impl Viewer {
             return;
         }
         let anchor = self.document.source_line_at(self.top);
-        self.document = Document::render(&self.markdown, width);
+        self.document = Document::render(&self.markdown, width, &self.folds);
         self.current_match = None;
         if self.width.is_some() {
             self.top = self.document.screen_line_of(anchor);

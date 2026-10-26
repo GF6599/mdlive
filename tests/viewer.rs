@@ -992,6 +992,91 @@ fn shows_front_matter_it_cannot_read_as_source() {
     assert_eq!(buffer[find(&buffer, "nested")].fg, theme::MUTED);
 }
 
+/// A details block shows only its summary until it is opened with the vim fold keys.
+///
+/// Why it matters: a details block hides material the author chose to fold away, and showing its
+/// raw HTML or its whole content buries the page the way the author meant it to read.
+#[test]
+fn folds_details_blocks_and_opens_them_with_the_fold_keys() {
+    // Given: a details block with inline HTML and an entity in its summary
+    let markdown = "Intro\n\n<details>\n<summary>More <b>info</b> &amp; notes</summary>\n\nHidden text\n\n> quoted\n\n</details>\n\nAfter\n";
+    let mut viewer = Viewer::new("doc.md", markdown);
+    let screen = |viewer: &mut Viewer| body(&draw(viewer, 40, 10));
+
+    // Then: the block is closed, showing its summary as plain text behind a marker
+    assert_eq!(
+        screen(&mut viewer)[..5],
+        [" Intro", "", " ▸ More info & notes", "", " After"]
+    );
+
+    // When: the reader types za
+    type_keys(&mut viewer, "za");
+    // Then: the fold opens and its content renders as Markdown
+    assert_eq!(
+        screen(&mut viewer)[..9],
+        [
+            " Intro",
+            "",
+            " ▾ More info & notes",
+            "",
+            " Hidden text",
+            "",
+            " ▎ quoted",
+            "",
+            " After"
+        ]
+    );
+
+    // When: the reader types zM, then zR
+    type_keys(&mut viewer, "zM");
+    assert_eq!(
+        screen(&mut viewer)[2..5],
+        [" ▸ More info & notes", "", " After"]
+    );
+    type_keys(&mut viewer, "zR");
+    // Then: every fold closes, then every fold opens
+    assert_eq!(screen(&mut viewer)[4], " Hidden text");
+}
+
+/// A details block marked open starts open, and a fold the reader toggled keeps its state when
+/// the file is saved.
+///
+/// Why it matters: a fold that snaps back on every save makes the reader open it again after each
+/// edit in the editor beside the preview.
+#[test]
+fn starts_open_folds_open_and_keeps_fold_state_across_a_reload() {
+    // Given: a closed fold, one marked open, and a third with the first one's summary
+    let markdown = "<details>\n<summary>First</summary>\n\none\n\n</details>\n\n<details open>\n<summary>Second</summary>\n\ntwo\n\n</details>\n\n<details>\n<summary>First</summary>\n\nthree\n\n</details>\n";
+    let mut viewer = Viewer::new("doc.md", markdown);
+    let screen = |viewer: &mut Viewer| body(&draw(viewer, 40, 12));
+
+    // Then: the first is closed and the second open
+    assert_eq!(
+        screen(&mut viewer)[..5],
+        [" ▸ First", "", " ▾ Second", "", " two"]
+    );
+
+    // When: the reader opens the first, and the file is saved with a line added at the end
+    type_keys(&mut viewer, "za");
+    viewer.reload(&format!("{markdown}\nadded\n"));
+    // Then: both folds keep their state, and the third, which shares the first one's summary,
+    // stays closed
+    assert_eq!(
+        screen(&mut viewer)[..9],
+        [
+            " ▾ First",
+            "",
+            " one",
+            "",
+            " ▾ Second",
+            "",
+            " two",
+            "",
+            " ▸ First"
+        ]
+    );
+}
+
 /// The quit keys end the viewer, and other keys keep it open.
 ///
 /// Why it matters: a viewer that ignores q traps the reader in the terminal.
@@ -1037,7 +1122,7 @@ fn keeps_the_reading_position_across_a_resize() {
 #[test]
 fn shows_html_as_source_and_hides_comments() {
     // Given: an HTML block, a paragraph with inline HTML and an inline comment, and a block comment
-    let markdown = "<details>\n<summary>More</summary>\n</details>\n\nkeep <kbd>K</kbd><!-- note --> this\n\n<!--\nhidden\n-->\n\nend\n";
+    let markdown = "<div align=\"center\">\n<span>More</span>\n</div>\n\nkeep <kbd>K</kbd><!-- note --> this\n\n<!--\nhidden\n-->\n\nend\n";
 
     // When: it is drawn
     let buffer = draw(&mut Viewer::new("doc.md", markdown), 40, 9);
@@ -1046,9 +1131,9 @@ fn shows_html_as_source_and_hides_comments() {
     assert_eq!(
         body(&buffer),
         [
-            " <details>",
-            " <summary>More</summary>",
-            " </details>",
+            " <div align=\"center\">",
+            " <span>More</span>",
+            " </div>",
             "",
             " keep <kbd>K</kbd> this",
             "",
@@ -1056,7 +1141,7 @@ fn shows_html_as_source_and_hides_comments() {
             "",
         ]
     );
-    assert_eq!(buffer[find(&buffer, "<summary>")].fg, theme::MUTED);
+    assert_eq!(buffer[find(&buffer, "<span>")].fg, theme::MUTED);
     assert_eq!(buffer[find(&buffer, "<kbd>")].fg, theme::MUTED);
 }
 
