@@ -449,6 +449,10 @@ impl Viewer {
             self.edit_prompt(key);
             return Flow::Continue;
         }
+        if let Some(tree) = self.tree.as_mut().filter(|tree| tree.is_typing()) {
+            tree.edit_filter(key);
+            return Flow::Continue;
+        }
         self.notice = None;
         let half_page = (self.page / 2).max(1);
         self.keys.hint_targets = if self.contents_is_open() && self.tree.is_none() {
@@ -469,7 +473,7 @@ impl Viewer {
         match command {
             Command::Quit | Command::Cancel => return Flow::Quit,
             Command::ToggleTree => self.enter_tree(),
-            Command::OpenEntry | Command::CloseFolder => {}
+            Command::OpenEntry | Command::CloseFolder | Command::FilterTree => {}
             Command::ToggleHelp => self.help_top = Some(0),
             Command::Back => {
                 self.step_history(|viewer| &mut viewer.back, |viewer| &mut viewer.forward)
@@ -693,7 +697,12 @@ impl Viewer {
         };
         match command {
             Command::Quit => return Flow::Quit,
-            Command::Cancel => self.keys.focus = Focus::Page,
+            Command::Cancel => {
+                if !tree.clear_filter() {
+                    self.keys.focus = Focus::Page;
+                }
+            }
+            Command::FilterTree => tree.start_filter(),
             Command::ToggleTree => {
                 self.tree = None;
                 self.keys.focus = Focus::Page;
@@ -736,8 +745,10 @@ impl Viewer {
         if self.help_top.is_some() {
             return hint_bar::Mode::Help;
         }
-        if self.keys.focus == Focus::Tree {
-            return hint_bar::Mode::Tree;
+        match &self.tree {
+            Some(tree) if tree.is_typing() => return hint_bar::Mode::TypingFilter,
+            Some(_) if self.keys.focus == Focus::Tree => return hint_bar::Mode::Tree,
+            _ => {}
         }
         hint_bar::Mode::Reading {
             headings_in_contents: self

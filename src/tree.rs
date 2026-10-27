@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
@@ -34,6 +35,10 @@ pub struct Tree {
     cursor: usize,
     /// The first row the panel shows.
     top: usize,
+    /// Words that every file on view holds in its path, in any case.
+    filter: String,
+    /// Whether the keys type into the filter.
+    typing: bool,
 }
 
 /// The folder a tree for the file at `path` starts from: the repository that holds it, or its own
@@ -111,7 +116,91 @@ impl Tree {
             open_folders: HashSet::new(),
             cursor: 0,
             top: 0,
+            filter: String::new(),
+            typing: false,
         }
+    }
+
+    pub fn is_typing(&self) -> bool {
+        self.typing
+    }
+
+    /// Starts typing a new filter.
+    pub fn start_filter(&mut self) {
+        self.typing = true;
+        self.set_filter(String::new());
+    }
+
+    /// Clears the filter, and answers whether there was one to clear.
+    pub fn clear_filter(&mut self) -> bool {
+        let had_one = !self.filter.is_empty();
+        self.typing = false;
+        self.set_filter(String::new());
+        had_one
+    }
+
+    /// Types `key` into the filter: Enter keeps it, Escape clears it.
+    pub fn edit_filter(&mut self, key: KeyEvent) {
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        let mut filter = self.filter.clone();
+        match key.code {
+            KeyCode::Enter => self.typing = false,
+            KeyCode::Esc => {
+                self.clear_filter();
+            }
+            KeyCode::Char('c') if control => {
+                self.clear_filter();
+            }
+            KeyCode::Backspace => {
+                filter.pop();
+                self.set_filter(filter);
+            }
+            KeyCode::Char(typed) if !control => {
+                filter.push(typed);
+                self.set_filter(filter);
+            }
+            _ => {}
+        }
+    }
+
+    /// Filters the tree and puts the cursor on the first file left.
+    fn set_filter(&mut self, filter: String) {
+        self.filter = filter;
+        self.top = 0;
+        if self.filter.trim().is_empty() {
+            return;
+        }
+        let rows = self.rows();
+        self.cursor = rows
+            .iter()
+            .position(|&index| !self.entries[index].folder)
+            .unwrap_or(0);
+    }
+
+    /// The files whose path under the root holds every word of the filter, and their folders.
+    fn filtered(&self) -> Option<HashSet<&Path>> {
+        let words: Vec<String> = self
+            .filter
+            .split_whitespace()
+            .map(str::to_lowercase)
+            .collect();
+        if words.is_empty() {
+            return None;
+        }
+        let mut kept = HashSet::new();
+        for entry in self.entries.iter().filter(|entry| !entry.folder) {
+            let relative = entry.path.strip_prefix(&self.root).unwrap_or(&entry.path);
+            let relative = relative.to_string_lossy().to_lowercase();
+            if words.iter().all(|word| relative.contains(word.as_str())) {
+                kept.extend(
+                    entry
+                        .path
+                        .ancestors()
+                        .take_while(|ancestor| *ancestor != self.root),
+                );
+            }
+        }
+        Some(kept)
     }
 
     /// Opens the folders down to `file` and puts the cursor on it, when the tree holds it.
@@ -134,8 +223,14 @@ impl Tree {
         }
     }
 
-    /// The entries on view: those whose folders are all open.
+    /// The entries on view: those the filter keeps, or with no filter those whose folders are
+    /// all open.
     fn rows(&self) -> Vec<usize> {
+        if let Some(kept) = self.filtered() {
+            return (0..self.entries.len())
+                .filter(|&index| kept.contains(self.entries[index].path.as_path()))
+                .collect();
+        }
         let mut rows = Vec::new();
         let mut closed_below: Option<usize> = None;
         for (index, entry) in self.entries.iter().enumerate() {
@@ -211,7 +306,14 @@ impl Tree {
         let block = Block::new()
             .borders(Borders::ALL)
             .border_style(theme::panel_border())
-            .title(Span::styled(format!(" {name} "), theme::panel_title()));
+            .title(Span::styled(
+                if self.typing || !self.filter.is_empty() {
+                    format!(" {name} /{} ", self.filter)
+                } else {
+                    format!(" {name} ")
+                },
+                theme::panel_title(),
+            ));
         let inner = block.inner(area);
         frame.render_widget(Clear, area);
         frame.render_widget(block.style(theme::page()), area);
@@ -233,8 +335,10 @@ impl Tree {
             .take(height)
             .map(|(row, &index)| {
                 let entry = &self.entries[index];
+                let open =
+                    !self.filter.trim().is_empty() || self.open_folders.contains(&entry.path);
                 let lead = " ".repeat(INDENT * entry.depth)
-                    + match (entry.folder, self.open_folders.contains(&entry.path)) {
+                    + match (entry.folder, open) {
                         (true, true) => "▾ ",
                         (true, false) => "▸ ",
                         (false, _) => "  ",

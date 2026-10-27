@@ -44,6 +44,7 @@ pub enum Command {
     ToggleTree,
     OpenEntry,
     CloseFolder,
+    FilterTree,
     /// Escape with no keys typed toward a command, which leaves whatever has the keys.
     Cancel,
 }
@@ -136,6 +137,7 @@ pub enum Action {
     ToggleTree,
     OpenEntry,
     CloseFolder,
+    FilterTree,
 }
 
 impl Action {
@@ -169,6 +171,7 @@ impl Action {
             Self::ToggleTree => "open, enter or close the file tree",
             Self::OpenEntry => "open folder or read file, in the tree",
             Self::CloseFolder => "close folder, in the tree",
+            Self::FilterTree => "filter the files, in the tree",
         }
     }
 
@@ -179,9 +182,12 @@ impl Action {
                 Group::Search
             }
             Self::ToggleFold | Self::OpenAllFolds | Self::CloseAllFolds => Group::Folds,
-            Self::Back | Self::Forward | Self::ToggleTree | Self::OpenEntry | Self::CloseFolder => {
-                Group::Files
-            }
+            Self::Back
+            | Self::Forward
+            | Self::ToggleTree
+            | Self::OpenEntry
+            | Self::CloseFolder
+            | Self::FilterTree => Group::Files,
             Self::Quit | Self::ToggleHelp => Group::Other,
             _ => Group::Move,
         }
@@ -223,6 +229,7 @@ impl Action {
             Self::ToggleTree => Command::ToggleTree,
             Self::OpenEntry => Command::OpenEntry,
             Self::CloseFolder => Command::CloseFolder,
+            Self::FilterTree => Command::FilterTree,
         }
     }
 }
@@ -351,6 +358,7 @@ const BINDINGS: &[Binding] = &[
     tree(&[Key::named(KeyCode::Right)], Action::OpenEntry),
     tree(&[Key::plain('h')], Action::CloseFolder),
     tree(&[Key::named(KeyCode::Left)], Action::CloseFolder),
+    tree(&[Key::plain('/')], Action::FilterTree),
 ];
 
 /// Quits from anywhere, even partway through a key sequence.

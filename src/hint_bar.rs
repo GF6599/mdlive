@@ -15,6 +15,7 @@ pub enum Mode {
     TypingSearch,
     Help,
     Tree,
+    TypingFilter,
     Reading {
         headings_in_contents: Option<usize>,
         search_active: bool,
@@ -51,11 +52,18 @@ pub fn hints_for(mode: &Mode) -> Vec<Hint> {
                 hint(keys_of(Action::Quit), "close"),
             ];
         }
+        Mode::TypingFilter => {
+            return vec![
+                hint(Key::named(KeyCode::Enter).label(), "keep"),
+                hint(CANCEL.label(), "clear"),
+            ];
+        }
         Mode::Tree => {
             return vec![
                 pair(Action::Down, Action::Up, "move"),
                 hint(keys_of(Action::OpenEntry), "open"),
                 hint(keys_of(Action::CloseFolder), "close"),
+                hint(keys_of(Action::FilterTree), "filter"),
                 hint(CANCEL.label(), "page"),
                 hint(keys_of(Action::ToggleTree), "close tree"),
                 hint(keys_of(Action::Quit), "quit"),

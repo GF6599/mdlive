@@ -146,7 +146,7 @@ fn browses_the_markdown_files_of_the_repository_in_a_tree() {
     );
     // And: the cursor is on the open file, and the bar names the keys of the tree
     assert_eq!(cursor(&buffer).as_deref(), Some("two.md"));
-    assert!(hint_bar(&buffer).contains("j/k move  l open  h close  Esc page"));
+    assert!(hint_bar(&buffer).contains("j/k move  l open  h close  / filter  Esc page"));
 
     // When: the reader presses Enter on the open file, and looks at the page
     press(&mut viewer, KeyCode::Enter);
@@ -273,4 +273,58 @@ fn starts_in_the_tree_of_a_folder_with_an_empty_page() {
     type_keys(&mut viewer, "-");
     // Then: it opens at the folder the viewer started on
     assert!(panel_title(&draw(&mut viewer)).starts_with("┌ docs"));
+}
+
+/// / in the tree filters it as the reader types to the files whose path holds every word, in any
+/// case, with their folders open. Enter keeps the filter, and Escape clears it.
+///
+/// Why it matters: a docs tree holds hundreds of pages, so the filter is how a reader reaches one
+/// they can name, and a filter that cannot be cleared hides the rest of the tree.
+#[test]
+fn filters_the_tree_to_the_files_whose_path_holds_every_word() {
+    // Given: the tree of a repository, holding the keys
+    let (_dir, two) = repository();
+    let mut viewer = viewer_of(&two);
+    type_keys(&mut viewer, "-");
+
+    // When: the reader presses / and types part of a name
+    type_keys(&mut viewer, "/thr");
+    let buffer = draw(&mut viewer);
+    // Then: the tree holds only that file and its folders, with the cursor on the file, and the
+    // bar names the keys of the filter
+    assert_eq!(
+        panel(&buffer),
+        ["▾ docs", "  ▾ 002-guide", "      three.md"]
+    );
+    assert_eq!(cursor(&buffer).as_deref(), Some("three.md"));
+    assert!(panel_title(&buffer).contains("/thr"));
+    assert!(hint_bar(&buffer).starts_with(" Enter keep  Esc clear"));
+
+    // When: the reader presses Enter, then l
+    press(&mut viewer, KeyCode::Enter);
+    type_keys(&mut viewer, "l");
+    // Then: the filter stays, and l reads the file instead of typing
+    let buffer = draw(&mut viewer);
+    assert_eq!(page_top(&buffer), "Three");
+    assert!(panel_title(&buffer).contains("/thr"));
+
+    // When: the reader presses Escape
+    press(&mut viewer, KeyCode::Esc);
+    // Then: the filter clears, and the tree keeps the keys
+    let buffer = draw(&mut viewer);
+    assert!(panel(&buffer).len() > 3);
+    assert!(cursor(&buffer).is_some());
+
+    // When: the reader filters by two words in another case
+    type_keys(&mut viewer, "/INTRO one");
+    // Then: only the file whose path holds both words is left
+    assert_eq!(
+        panel(&draw(&mut viewer)),
+        ["▾ docs", "  ▾ 001-intro", "      one.md"]
+    );
+
+    // When: the reader presses Escape while typing
+    press(&mut viewer, KeyCode::Esc);
+    // Then: the filter clears
+    assert!(panel(&draw(&mut viewer)).len() > 3);
 }
