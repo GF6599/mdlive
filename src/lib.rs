@@ -68,7 +68,8 @@ struct Place {
 
 #[derive(Debug)]
 pub struct Viewer {
-    path: PathBuf,
+    /// The file on the page, none on the empty page of a viewer started on a folder.
+    path: Option<PathBuf>,
     title: String,
     markdown: String,
     document: Document,
@@ -83,6 +84,8 @@ pub struct Viewer {
     help_top: Option<usize>,
     /// The file tree, while it is open in place of the contents.
     tree: Option<Tree>,
+    /// The folder the tree opens at, when the viewer started on a folder instead of a file.
+    tree_root: Option<PathBuf>,
     folds: Folds,
     /// The search being typed in the status line.
     prompt: Option<Search>,
@@ -100,7 +103,7 @@ pub struct Viewer {
 impl Viewer {
     pub fn new(title: &str, markdown: &str) -> Self {
         Self {
-            path: PathBuf::from(title),
+            path: None,
             title: title.to_string(),
             markdown: markdown.to_string(),
             document: Document::default(),
@@ -112,6 +115,7 @@ impl Viewer {
             contents_open: None,
             help_top: None,
             tree: None,
+            tree_root: None,
             folds: Folds::default(),
             prompt: None,
             search: None,
@@ -128,21 +132,30 @@ impl Viewer {
     /// Names the file the page came from, which the reader goes back to after opening another.
     #[must_use]
     pub fn with_path(mut self, path: &Path) -> Self {
-        self.path = path.to_path_buf();
+        self.path = Some(path.to_path_buf());
+        self
+    }
+
+    /// Starts with the tree of `root` holding the keys, for a viewer started on a folder.
+    #[must_use]
+    pub fn with_tree(mut self, root: &Path) -> Self {
+        self.tree_root = Some(root.to_path_buf());
+        self.enter_tree();
         self
     }
 
     /// The file on screen, which a watch follows to reload the page.
-    pub fn path(&self) -> &Path {
-        &self.path
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
     }
 
     /// Shows the Markdown file at `path` from its top, and keeps this page for Ctrl-o.
     pub fn open(&mut self, path: &Path) {
         match std::fs::read_to_string(path) {
             Ok(markdown) => {
-                let here = self.place();
-                self.back.push(here);
+                if let Some(here) = self.place() {
+                    self.back.push(here);
+                }
                 self.forward.clear();
                 self.show(path, &markdown, 0);
             }
@@ -162,8 +175,9 @@ impl Viewer {
         };
         match std::fs::read_to_string(&place.path) {
             Ok(markdown) => {
-                let here = self.place();
-                to(self).push(here);
+                if let Some(here) = self.place() {
+                    to(self).push(here);
+                }
                 self.show(&place.path, &markdown, place.source_line);
             }
             Err(error) => {
@@ -173,17 +187,17 @@ impl Viewer {
         }
     }
 
-    fn place(&self) -> Place {
-        Place {
-            path: self.path.clone(),
+    fn place(&self) -> Option<Place> {
+        Some(Place {
+            path: self.path.clone()?,
             source_line: self.document.source_line_at(self.top),
-        }
+        })
     }
 
     /// Puts the page of `path` on screen with `source_line` at the top, and drops what belonged to
     /// the page before it: its folds, its search and its error.
     fn show(&mut self, path: &Path, markdown: &str, source_line: usize) {
-        self.path = path.to_path_buf();
+        self.path = Some(path.to_path_buf());
         self.title = path.file_name().map_or_else(
             || path.display().to_string(),
             |name| name.to_string_lossy().into_owned(),
@@ -268,7 +282,7 @@ impl Viewer {
         match (&mut self.tree, panel) {
             (Some(tree), Some(panel)) => {
                 let focused = self.keys.focus == Focus::Tree;
-                tree.draw(frame, panel, Some(&self.path), focused);
+                tree.draw(frame, panel, self.path.as_deref(), focused);
             }
             (None, Some(panel)) => {
                 let current = self.document.heading_at(self.top);
@@ -658,8 +672,15 @@ impl Viewer {
     /// Gives the tree the keys, opening it at the root of the page's file when it is closed.
     fn enter_tree(&mut self) {
         if self.tree.is_none() {
-            let mut tree = Tree::scan(&root_of(&self.path));
-            tree.reveal(&self.path);
+            let root = match (&self.tree_root, &self.path) {
+                (Some(root), _) => root.clone(),
+                (None, Some(path)) => root_of(path),
+                (None, None) => PathBuf::from("."),
+            };
+            let mut tree = Tree::scan(&root);
+            if let Some(path) = &self.path {
+                tree.reveal(path);
+            }
             self.tree = Some(tree);
         }
         self.keys.focus = Focus::Tree;
@@ -688,7 +709,10 @@ impl Viewer {
             Command::CloseFolder => tree.close_folder(),
             Command::OpenEntry => {
                 if let Some(file) = tree.open_entry()
-                    && !same_file(&file, &self.path)
+                    && !self
+                        .path
+                        .as_deref()
+                        .is_some_and(|path| same_file(&file, path))
                 {
                     self.open(&file);
                 }

@@ -56,10 +56,10 @@ pub fn watch_file(
 
 /// Watches the file the reader has open, and moves the watch when they open another.
 pub struct OpenFileWatch {
-    path: PathBuf,
+    path: Option<PathBuf>,
     debounce: Duration,
     on_change: Arc<dyn Fn(Result<(), String>) + Send + Sync>,
-    _watch: FileWatch,
+    _watch: Option<FileWatch>,
 }
 
 impl std::fmt::Debug for OpenFileWatch {
@@ -72,25 +72,24 @@ impl std::fmt::Debug for OpenFileWatch {
 }
 
 impl OpenFileWatch {
+    /// Watches nothing until the first `follow`.
     pub fn new(
-        path: &Path,
         debounce: Duration,
         on_change: impl Fn(Result<(), String>) + Send + Sync + 'static,
-    ) -> notify::Result<Self> {
-        let on_change: Arc<dyn Fn(Result<(), String>) + Send + Sync> = Arc::new(on_change);
-        Ok(Self {
-            path: path.to_path_buf(),
+    ) -> Self {
+        Self {
+            path: None,
             debounce,
-            _watch: watch_shared(path, debounce, &on_change)?,
-            on_change,
-        })
+            on_change: Arc::new(on_change),
+            _watch: None,
+        }
     }
 
     /// Watches `path` from now on. On an error the watch stays on the file it had.
     pub fn follow(&mut self, path: &Path) -> notify::Result<()> {
-        if path != self.path {
-            self._watch = watch_shared(path, self.debounce, &self.on_change)?;
-            self.path = path.to_path_buf();
+        if self.path.as_deref() != Some(path) {
+            self._watch = Some(watch_shared(path, self.debounce, &self.on_change)?);
+            self.path = Some(path.to_path_buf());
         }
         Ok(())
     }

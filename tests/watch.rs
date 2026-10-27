@@ -65,10 +65,10 @@ fn follows_the_file_the_reader_opens() {
     fs::write(&first, "one").unwrap();
     fs::write(&second, "one").unwrap();
     let (sender, changes) = mpsc::channel();
-    let mut watch = OpenFileWatch::new(&first, DEBOUNCE, move |change| {
+    let mut watch = OpenFileWatch::new(DEBOUNCE, move |change| {
         let _ = sender.send(change);
-    })
-    .unwrap();
+    });
+    watch.follow(&first).unwrap();
     watch.follow(&second).unwrap();
     while changes.recv_timeout(QUIET).is_ok() {}
 

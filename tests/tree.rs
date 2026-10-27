@@ -234,3 +234,43 @@ fn roots_the_tree_at_the_folder_of_a_page_outside_a_repository() {
         [entry("  page.md", true), entry("  sibling.md", false)]
     );
 }
+
+/// A viewer started on a folder opens with the tree of that folder and an empty page, and the
+/// tree keeps that root after a file is read.
+///
+/// Why it matters: `mdl <folder>` and plain `mdl` have no page yet, so the tree is the only way
+/// in, and an empty page that counted as a place to go back to would make Ctrl-o blank the screen.
+#[test]
+fn starts_in_the_tree_of_a_folder_with_an_empty_page() {
+    // Given: a viewer started on the docs folder of a repository
+    let (dir, _) = repository();
+    let docs = dir.path().join("docs");
+    let mut viewer = Viewer::new("docs", "").with_tree(&docs);
+
+    // When: the screen is drawn
+    let buffer = draw(&mut viewer);
+    // Then: the tree of the folder has the keys, with every folder closed, and no file is marked
+    assert!(panel_title(&buffer).starts_with("┌ docs"));
+    assert_eq!(panel(&buffer), ["▸ 001-intro", "▸ 002-guide"]);
+    assert_eq!(cursor(&buffer).as_deref(), Some("▸ 001-intro"));
+    assert!(status(&buffer).starts_with(" docs"));
+
+    // When: the reader opens the first folder and reads its first file
+    type_keys(&mut viewer, "ljl");
+    // Then: the page shows it
+    assert_eq!(page_top(&draw(&mut viewer)), "One");
+
+    // When: the reader presses Ctrl-o, and gives the page the keys
+    viewer.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    press(&mut viewer, KeyCode::Esc);
+    let buffer = draw(&mut viewer);
+    // Then: the page stays, because the empty start is not a page to go back to
+    assert_eq!(page_top(&buffer), "One");
+    assert!(!hint_bar(&buffer).contains("C-o back"));
+
+    // When: the reader closes the tree and opens it again
+    type_keys(&mut viewer, "--");
+    type_keys(&mut viewer, "-");
+    // Then: it opens at the folder the viewer started on
+    assert!(panel_title(&draw(&mut viewer)).starts_with("┌ docs"));
+}
