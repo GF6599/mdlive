@@ -3,6 +3,7 @@ mod diagrams;
 mod document;
 mod folds;
 mod front_matter;
+mod help;
 mod highlight;
 mod hint_bar;
 mod hyperlink;
@@ -68,6 +69,8 @@ pub struct Viewer {
     keys: KeyReader,
     /// `None` until the first draw decides from the screen width, or the reader presses t.
     contents_open: Option<bool>,
+    /// The first row of the help screen in view, while it is open.
+    help_top: Option<usize>,
     folds: Folds,
     /// The search being typed in the status line.
     prompt: Option<Search>,
@@ -92,6 +95,7 @@ impl Viewer {
             error: None,
             keys: KeyReader::default(),
             contents_open: None,
+            help_top: None,
             folds: Folds::default(),
             prompt: None,
             search: None,
@@ -157,12 +161,21 @@ impl Viewer {
         frame.render_widget(Paragraph::new(lines), text);
         self.mark_matches(frame, text);
         let popup = Popup::of(&self.keys).map(|popup| (popup.area(body), popup));
-        let covered = popup.as_ref().map(|(area, _)| *area);
+        if let Some(top) = self.help_top {
+            self.help_top = Some(top.min(help::last_top(body.height)));
+        }
+        let covered = match self.help_top {
+            Some(_) => Some(body),
+            None => popup.as_ref().map(|(area, _)| *area),
+        };
         self.links = self.links_on_screen(text, panel, covered);
         self.draw_pictures(frame, text, panel, covered);
         if let Some(panel) = panel {
             let current = self.document.heading_at(self.top);
             contents::draw(frame, panel, self.document.headings(), current);
+        }
+        if let Some(top) = self.help_top {
+            help::draw(frame, body, top);
         }
         if let Some((area, popup)) = &popup {
             popup.draw(frame, *area);
@@ -330,8 +343,13 @@ impl Viewer {
         let Some(command) = self.keys.read(key) else {
             return Flow::Continue;
         };
+        if let Some(top) = self.help_top {
+            self.help_top = scroll_help(command, top, half_page, self.page);
+            return Flow::Continue;
+        }
         match command {
             Command::Quit => return Flow::Quit,
+            Command::ToggleHelp => self.help_top = Some(0),
             Command::ToggleContents => self.contents_open = Some(!self.contents_is_open()),
             Command::Search { forward } => {
                 self.prompt = Some(Search {
@@ -528,6 +546,9 @@ impl Viewer {
         if self.prompt.is_some() {
             return hint_bar::Mode::TypingSearch;
         }
+        if self.help_top.is_some() {
+            return hint_bar::Mode::Help;
+        }
         hint_bar::Mode::Reading {
             headings_in_contents: self
                 .contents_is_open()
@@ -581,5 +602,22 @@ impl Viewer {
             return 100;
         }
         (self.top + self.page).min(len) * 100 / len
+    }
+}
+
+/// Moves the help screen for a movement command. Quit and the help keys close it, and every other
+/// command does nothing while it is open.
+fn scroll_help(command: Command, top: usize, half_page: usize, page: usize) -> Option<usize> {
+    match command {
+        Command::Quit | Command::ToggleHelp => None,
+        Command::Down(times) => Some(top.saturating_add(times)),
+        Command::Up(times) => Some(top.saturating_sub(times)),
+        Command::HalfPageDown(times) => Some(top.saturating_add(half_page.saturating_mul(times))),
+        Command::HalfPageUp(times) => Some(top.saturating_sub(half_page.saturating_mul(times))),
+        Command::PageDown(times) => Some(top.saturating_add(page.saturating_mul(times))),
+        Command::PageUp(times) => Some(top.saturating_sub(page.saturating_mul(times))),
+        Command::Top => Some(0),
+        Command::End => Some(usize::MAX),
+        _ => Some(top),
     }
 }

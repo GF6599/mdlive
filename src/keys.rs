@@ -1,5 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+/// The hint letters a key list names before it trails off, as the contents shows them all.
+pub const HINT_LETTERS_LISTED: usize = 3;
 /// The letters no other key takes, home row first. `z` stays out because the fold keys start
 /// with it.
 const HINT_LETTERS: [char; 19] = [
@@ -36,6 +38,37 @@ pub enum Command {
         reverse: bool,
         times: usize,
     },
+    ToggleHelp,
+}
+
+/// A heading of the help screen, in the order the screen shows them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Group {
+    Move,
+    Sections,
+    Search,
+    Folds,
+    Other,
+}
+
+impl Group {
+    pub const ALL: [Self; 5] = [
+        Self::Move,
+        Self::Sections,
+        Self::Search,
+        Self::Folds,
+        Self::Other,
+    ];
+
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Move => "Move",
+            Self::Sections => "Sections",
+            Self::Search => "Search",
+            Self::Folds => "Folds",
+            Self::Other => "Other",
+        }
+    }
 }
 
 /// What a binding does, before the count typed ahead of it turns it into a command.
@@ -62,6 +95,7 @@ pub enum Action {
     ToggleFold,
     OpenAllFolds,
     CloseAllFolds,
+    ToggleHelp,
 }
 
 impl Action {
@@ -89,6 +123,19 @@ impl Action {
             Self::ToggleFold => "open or close fold",
             Self::OpenAllFolds => "open all folds",
             Self::CloseAllFolds => "close all folds",
+            Self::ToggleHelp => "show the keys",
+        }
+    }
+
+    const fn group(self) -> Group {
+        match self {
+            Self::NextHeading | Self::PreviousHeading | Self::ToggleContents => Group::Sections,
+            Self::SearchForward | Self::SearchBackward | Self::NextMatch | Self::PreviousMatch => {
+                Group::Search
+            }
+            Self::ToggleFold | Self::OpenAllFolds | Self::CloseAllFolds => Group::Folds,
+            Self::Quit | Self::ToggleHelp => Group::Other,
+            _ => Group::Move,
         }
     }
 
@@ -122,6 +169,7 @@ impl Action {
             Self::ToggleFold => Command::ToggleFold,
             Self::OpenAllFolds => Command::OpenAllFolds,
             Self::CloseAllFolds => Command::CloseAllFolds,
+            Self::ToggleHelp => Command::ToggleHelp,
         }
     }
 }
@@ -216,7 +264,14 @@ const BINDINGS: &[Binding] = &[
     bind(&[Key::plain('z'), Key::plain('a')], Action::ToggleFold),
     bind(&[Key::plain('z'), Key::plain('R')], Action::OpenAllFolds),
     bind(&[Key::plain('z'), Key::plain('M')], Action::CloseAllFolds),
+    bind(&[Key::plain('g'), Key::plain('?')], Action::ToggleHelp),
+    bind(&[Key::named(KeyCode::F(1))], Action::ToggleHelp),
 ];
+
+/// Quits from anywhere, even partway through a key sequence.
+const QUIT_ANYWHERE: Key = Key::control('c');
+/// Drops the keys typed toward a command, or quits when there are none.
+const CANCEL: Key = Key::named(KeyCode::Esc);
 
 fn action_of(keys: &[Key]) -> Option<Action> {
     BINDINGS
@@ -240,6 +295,40 @@ pub fn next_keys(prefix: Key) -> Vec<(Key, Action)> {
             _ => None,
         })
         .collect()
+}
+
+/// Every key of `group` with what it does, one row per action, in the order of the table.
+pub fn key_list(group: Group) -> Vec<(String, &'static str)> {
+    let mut rows: Vec<(Action, Vec<String>)> = Vec::new();
+    for binding in BINDINGS
+        .iter()
+        .filter(|binding| binding.action.group() == group)
+    {
+        let keys: String = binding.keys.iter().map(|key| key.label()).collect();
+        match rows
+            .iter_mut()
+            .find(|(action, _)| *action == binding.action)
+        {
+            Some((_, all)) => all.push(keys),
+            None => rows.push((binding.action, vec![keys])),
+        }
+    }
+    let mut list: Vec<_> = rows
+        .into_iter()
+        .map(|(action, keys)| (keys.join(", "), action.label()))
+        .collect();
+    match group {
+        Group::Sections => list.push((
+            format!("{}, …", hints(HINT_LETTERS_LISTED).join(", ")),
+            "go to a section, with the contents open",
+        )),
+        Group::Other => list.extend([
+            (QUIT_ANYWHERE.label(), Action::Quit.label()),
+            (CANCEL.label(), "drop typed keys, or quit"),
+        ]),
+        _ => {}
+    }
+    list
 }
 
 /// The keys of the first binding of `action`, as a hint shows them, such as `gg` or `C-d`.
@@ -280,10 +369,10 @@ pub struct KeyReader {
 impl KeyReader {
     pub fn read(&mut self, event: KeyEvent) -> Option<Command> {
         let key = Key::of(event);
-        if key == Key::control('c') {
+        if key == QUIT_ANYWHERE {
             return Some(Command::Quit);
         }
-        if key.code == KeyCode::Esc {
+        if key == CANCEL {
             let pending = self.count.is_some() || self.prefix.is_some();
             self.clear();
             return (!pending).then_some(Command::Quit);

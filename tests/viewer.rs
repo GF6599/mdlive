@@ -745,7 +745,7 @@ fn shows_the_keys_for_what_the_reader_is_doing_in_a_bar() {
     // Then: the bar names the reading keys, the fold key because the page has a fold, and quit
     assert_eq!(
         hint_bar(&buffer),
-        " j/k scroll  t contents  ]]/[[ section  / search  za fold  C-d/C-u half page  q quit"
+        " j/k scroll  g? help  t contents  ]]/[[ section  / search  za fold  C-d/C-u half page  q quit"
     );
     // And: each key stands out from its label
     let (x, y) = find(&buffer, "j/k scroll");
@@ -774,13 +774,13 @@ fn shows_the_keys_for_what_the_reader_is_doing_in_a_bar() {
             .starts_with(" a/s go to section  t close contents  j/k scroll")
     );
 
-    // When: the screen is 32 columns wide, with the contents closed
+    // When: the screen is 40 columns wide, with the contents closed
     type_keys(&mut viewer, "t");
     // Then: the bar keeps the first hints that fit whole, and drops every hint after them, even
     // one short enough to fit
     assert_eq!(
-        hint_bar(&draw(&mut viewer, 32, 10)),
-        " j/k scroll  t contents"
+        hint_bar(&draw(&mut viewer, 40, 10)),
+        " j/k scroll  g? help  t contents"
     );
 }
 
@@ -835,6 +835,88 @@ fn lists_the_next_keys_after_a_prefix_key() {
     let buffer = draw(&mut viewer, 80, 14);
     assert!(!rows(&buffer).iter().any(|row| row.contains("┌ a ")));
     assert!(status(&buffer).contains(" a  "));
+}
+
+/// g? or F1 opens a screen that lists every key by group, the movement keys scroll it, and q or
+/// Escape closes it. Other keys do nothing while it is open, and the links under it do not open.
+///
+/// Why it matters: the help screen is where a reader finds a key they do not know, so a key it
+/// leaves out stays hidden, and a screen that cannot scroll or close traps the reader.
+#[test]
+fn lists_every_key_on_a_help_screen() {
+    // Given: a page with a link
+    let mut viewer = Viewer::new("doc.md", "# Title\n\n[a link](https://example.com)\n");
+    draw(&mut viewer, 80, 50);
+    assert!(!viewer.links().is_empty());
+
+    // When: the reader types g?
+    type_keys(&mut viewer, "g?");
+    let shown = body(&draw(&mut viewer, 80, 50));
+    // Then: the screen lists each group, and each key with what it does
+    for group in ["Move", "Sections", "Search", "Folds", "Other"] {
+        assert!(
+            shown.iter().any(|row| row.trim() == group),
+            "{group} missing"
+        );
+    }
+    for (keys, label) in [
+        ("j, C-e, ↓", "scroll down"),
+        ("gg, Home", "go to top or line N"),
+        ("]]", "next section"),
+        ("a, s, d, …", "go to a section, with the contents open"),
+        ("/", "search forward"),
+        ("za", "open or close fold"),
+        ("g?, F1", "show the keys"),
+        ("C-c", "quit"),
+        ("Esc", "drop typed keys, or quit"),
+    ] {
+        assert!(
+            shown.iter().any(|row| row
+                .find(keys)
+                .is_some_and(|at| row[at..].contains(&format!("  {label}")))),
+            "{keys}  {label} missing from\n{}",
+            shown.join("\n")
+        );
+    }
+    // And: no link under the screen opens
+    assert!(viewer.links().is_empty());
+
+    // When: the screen is short and the reader presses j
+    let first_row = |viewer: &mut Viewer| body(&draw(viewer, 80, 12))[0].clone();
+    let before = first_row(&mut viewer);
+    type_keys(&mut viewer, "j");
+    // Then: the list scrolls, and the bar names the keys of the help screen
+    assert_ne!(first_row(&mut viewer), before);
+    assert_eq!(hint_bar(&draw(&mut viewer, 80, 12)), " j/k scroll  q close");
+
+    // When: the reader presses G
+    type_keys(&mut viewer, "G");
+    // Then: the list stops at its last entry instead of scrolling past it
+    let shown = body(&draw(&mut viewer, 80, 12));
+    assert!(shown.last().unwrap().contains("drop typed keys, or quit"));
+
+    // When: the reader presses t
+    let shown = rows(&draw(&mut viewer, 80, 12));
+    type_keys(&mut viewer, "t");
+    // Then: the screen stays as it was
+    assert_eq!(rows(&draw(&mut viewer, 80, 12)), shown);
+
+    // When: the reader presses q
+    // Then: the help closes, the viewer goes on, and the page and its link are back
+    assert_eq!(type_keys(&mut viewer, "q"), Flow::Continue);
+    assert_eq!(body(&draw(&mut viewer, 80, 12))[0], " Title");
+    assert!(!viewer.links().is_empty());
+
+    // When: the reader presses F1, then Escape
+    press(&mut viewer, KeyCode::F(1));
+    assert!(
+        body(&draw(&mut viewer, 80, 50))
+            .iter()
+            .any(|row| row.trim() == "Folds")
+    );
+    press(&mut viewer, KeyCode::Esc);
+    // Then: the help opens, then closes
+    assert_eq!(body(&draw(&mut viewer, 80, 12))[0], " Title");
 }
 
 /// While the key popup is open, a link under it does not open on a click.

@@ -5,16 +5,15 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
-use crate::keys::{Action, Key, hints, keys_of};
+use crate::keys::{Action, HINT_LETTERS_LISTED, Key, hints, keys_of};
 use crate::theme;
 
 const GAP: &str = "  ";
-/// The hint letters the bar names before it trails off, as the contents shows them all.
-const HINT_LETTERS_SHOWN: usize = 3;
 
 /// What the reader is doing, which decides the keys worth naming.
 pub enum Mode {
     TypingSearch,
+    Help,
     Reading {
         headings_in_contents: Option<usize>,
         search_active: bool,
@@ -37,21 +36,29 @@ fn pair(first: Action, second: Action, label: &'static str) -> Hint {
 
 /// The hints for `mode`, the most useful first, because a narrow bar drops them from the end.
 pub fn hints_for(mode: &Mode) -> Vec<Hint> {
-    let Mode::Reading {
-        headings_in_contents,
-        search_active,
-        has_folds,
-    } = *mode
-    else {
-        return vec![
-            hint(Key::named(KeyCode::Enter).label(), "search"),
-            hint(Key::named(KeyCode::Esc).label(), "cancel"),
-        ];
+    let (headings_in_contents, search_active, has_folds) = match *mode {
+        Mode::TypingSearch => {
+            return vec![
+                hint(Key::named(KeyCode::Enter).label(), "search"),
+                hint(Key::named(KeyCode::Esc).label(), "cancel"),
+            ];
+        }
+        Mode::Help => {
+            return vec![
+                pair(Action::Down, Action::Up, "scroll"),
+                hint(keys_of(Action::Quit), "close"),
+            ];
+        }
+        Mode::Reading {
+            headings_in_contents,
+            search_active,
+            has_folds,
+        } => (headings_in_contents, search_active, has_folds),
     };
     let mut bar = Vec::new();
     if let Some(count) = headings_in_contents.filter(|count| *count > 0) {
-        let letters = hints(count.min(HINT_LETTERS_SHOWN)).join("/");
-        let more = if count > HINT_LETTERS_SHOWN {
+        let letters = hints(count.min(HINT_LETTERS_LISTED)).join("/");
+        let more = if count > HINT_LETTERS_LISTED {
             "…"
         } else {
             ""
@@ -64,10 +71,11 @@ pub fn hints_for(mode: &Mode) -> Vec<Hint> {
     };
     let contents = hint(keys_of(Action::ToggleContents), contents_label);
     let scroll = pair(Action::Down, Action::Up, "scroll");
+    let help = hint(keys_of(Action::ToggleHelp), "help");
     if headings_in_contents.is_some() {
-        bar.extend([contents, scroll]);
+        bar.extend([contents, scroll, help]);
     } else {
-        bar.extend([scroll, contents]);
+        bar.extend([scroll, help, contents]);
     }
     bar.push(pair(
         Action::NextHeading,
