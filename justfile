@@ -10,6 +10,13 @@ default:
 run *args:
     cargo run -- "$@"
 
+# Record doc/demo.gif from demo.tape
+[group('run')]
+demo:
+    cargo build --locked --release
+    mkdir -p doc
+    vhs demo.tape
+
 # Lint with warnings denied
 [group('dev')]
 lint:
