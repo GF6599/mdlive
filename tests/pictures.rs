@@ -12,6 +12,10 @@ use ratatui::style::Color;
 use ratatui_image::picker::Picker;
 use unicode_width::UnicodeWidthStr;
 
+mod common;
+
+use common::{HEADER_ROWS, below_header};
+
 const RED: Rgb<u8> = Rgb([255, 0, 0]);
 const BLUE: Rgb<u8> = Rgb([0, 0, 255]);
 
@@ -29,9 +33,9 @@ fn viewer(dir: &Path, markdown: &str) -> Viewer {
 }
 
 fn draw(viewer: &mut Viewer, width: u16, height: u16) -> Buffer {
-    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(width, height + HEADER_ROWS)).unwrap();
     terminal.draw(|frame| viewer.draw(frame)).unwrap();
-    terminal.backend().buffer().clone()
+    below_header(terminal.backend().buffer())
 }
 
 fn row(buffer: &Buffer, y: u16) -> String {

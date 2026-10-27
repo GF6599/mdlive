@@ -9,13 +9,17 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 
+mod common;
+
+use common::{HEADER_ROWS, below_header};
+
 const WIDTH: u16 = 60;
 const HEIGHT: u16 = 10;
 
 fn draw(viewer: &mut Viewer) -> Buffer {
-    let mut terminal = Terminal::new(TestBackend::new(WIDTH, HEIGHT)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(WIDTH, HEIGHT + HEADER_ROWS)).unwrap();
     terminal.draw(|frame| viewer.draw(frame)).unwrap();
-    terminal.backend().buffer().clone()
+    below_header(terminal.backend().buffer())
 }
 
 fn row(buffer: &Buffer, y: u16) -> String {

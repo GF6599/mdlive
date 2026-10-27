@@ -9,13 +9,17 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 
+mod common;
+
+use common::{HEADER_ROWS, below_header};
+
 const WIDTH: u16 = 80;
 const HEIGHT: u16 = 13;
 
 fn draw(viewer: &mut Viewer) -> Buffer {
-    let mut terminal = Terminal::new(TestBackend::new(WIDTH, HEIGHT)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(WIDTH, HEIGHT + HEADER_ROWS)).unwrap();
     terminal.draw(|frame| viewer.draw(frame)).unwrap();
-    terminal.backend().buffer().clone()
+    below_header(terminal.backend().buffer())
 }
 
 fn cells(buffer: &Buffer, y: u16, from: u16, to: u16) -> String {
@@ -30,11 +34,13 @@ fn full_row(buffer: &Buffer, y: u16) -> String {
     cells(buffer, y, 0, WIDTH).trim().to_string()
 }
 
+/// A mouse event at `row` counted below the breadcrumb, as the screen helpers count rows. The
+/// terminal reports screen rows, so the event carries the breadcrumb row too.
 fn mouse(viewer: &mut Viewer, kind: MouseEventKind, column: u16, row: u16) {
     viewer.handle_mouse(MouseEvent {
         kind,
         column,
-        row,
+        row: row + HEADER_ROWS,
         modifiers: KeyModifiers::NONE,
     });
 }

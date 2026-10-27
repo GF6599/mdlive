@@ -8,10 +8,19 @@ use ratatui::buffer::Buffer;
 use ratatui::style::Modifier;
 use unicode_width::UnicodeWidthStr;
 
-fn draw(viewer: &mut Viewer, width: u16, height: u16) -> Buffer {
+mod common;
+
+use common::{HEADER_ROWS, below_header};
+
+fn draw_screen(viewer: &mut Viewer, width: u16, height: u16) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|frame| viewer.draw(frame)).unwrap();
     terminal.backend().buffer().clone()
+}
+
+/// The `height` rows under the breadcrumb row of a screen one row taller.
+fn draw(viewer: &mut Viewer, width: u16, height: u16) -> Buffer {
+    below_header(&draw_screen(viewer, width, height + HEADER_ROWS))
 }
 
 /// Each row as a reader sees it, with a wide character counted once and trailing blanks cut.
@@ -933,11 +942,11 @@ fn leaves_out_the_links_under_the_key_popup() {
     // Given: a page that is one long link
     let markdown = format!("[{}](https://example.com)\n", "linked words ".repeat(80));
     let mut viewer = Viewer::new("doc.md", &markdown);
+    // A link area is in screen rows, and `find` counts rows below the breadcrumb.
     let covers = |viewer: &Viewer, (x, y): (u16, u16)| {
-        viewer
-            .links()
-            .iter()
-            .any(|link| link.area.y == y && (link.area.x..link.area.right()).contains(&x))
+        viewer.links().iter().any(|link| {
+            link.area.y == y + HEADER_ROWS && (link.area.x..link.area.right()).contains(&x)
+        })
     };
 
     // When: the reader presses z
@@ -951,6 +960,47 @@ fn leaves_out_the_links_under_the_key_popup() {
     draw(&mut viewer, 80, 14);
     // Then: the link covers that cell again
     assert!(covers(&viewer, cell));
+}
+
+/// The top row names the file and the headings above the reading position, and on a narrow
+/// screen it drops the outer headings first.
+///
+/// Why it matters: deep in a long page the reader loses which section they are in, and a path cut
+/// at its end would hide the one heading that answers that.
+#[test]
+fn shows_the_file_and_the_sections_above_the_reading_position() {
+    // Given: a page with three levels of headings, then a second section
+    let filler: String = (1..=8).map(|n| format!("filler {n}\n\n")).collect();
+    let markdown = format!(
+        "# Semiconductor\n\nintro\n\n## Band gap\n\ntext\n\n### Doping\n\n{filler}## Junction\n\n{filler}"
+    );
+    let mut viewer = Viewer::new("doc.md", &markdown);
+    let header = |viewer: &mut Viewer, width| rows(&draw_screen(viewer, width, 12))[0].clone();
+    // Then: at the top it names the file and the first heading
+    assert_eq!(header(&mut viewer, 80), " doc.md › Semiconductor");
+
+    // When: the reader jumps two sections on
+    type_keys(&mut viewer, "2]]");
+    // Then: it names every heading above, from the outermost
+    assert_eq!(
+        header(&mut viewer, 80),
+        " doc.md › Semiconductor › Band gap › Doping"
+    );
+
+    // When: the screen is 30 columns wide
+    // Then: the outer headings give way to an ellipsis, and the file and the section stay
+    assert_eq!(header(&mut viewer, 30), " doc.md › … › Doping");
+
+    // When: the reader jumps to the next section, one level up
+    type_keys(&mut viewer, "]]");
+    // Then: the headings below it leave the path
+    assert_eq!(
+        header(&mut viewer, 80),
+        " doc.md › Semiconductor › Junction"
+    );
+
+    // And: a page with no headings shows the file alone
+    assert_eq!(header(&mut Viewer::new("doc.md", "text\n"), 80), " doc.md");
 }
 
 /// Thirty one-line paragraphs, with "needle" in paragraphs 3, 15 and 25.

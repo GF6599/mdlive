@@ -9,15 +9,19 @@ use ratatui::buffer::Buffer;
 use ratatui_image::picker::{Picker, ProtocolType};
 use unicode_width::UnicodeWidthStr;
 
+mod common;
+
+use common::{HEADER_ROWS, below_header};
+
 const FLOW: &str = "```mermaid\nflowchart LR\n  A[Write] --> B[Preview]\n```\n\nafter\n";
 /// The character the kitty protocol puts in each cell a picture covers.
 const KITTY_CELL: char = '\u{10EEEE}';
 
 fn draw(picker: Picker, markdown: &str, width: u16, height: u16) -> Buffer {
     let mut viewer = Viewer::new("doc.md", markdown).with_images(Path::new("."), picker);
-    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(width, height + HEADER_ROWS)).unwrap();
     terminal.draw(|frame| viewer.draw(frame)).unwrap();
-    terminal.backend().buffer().clone()
+    below_header(terminal.backend().buffer())
 }
 
 fn rows(buffer: &Buffer) -> Vec<String> {

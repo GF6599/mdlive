@@ -160,6 +160,18 @@ pub fn tree_cursor() -> Style {
     Style::new().bg(HL_MED)
 }
 
+pub fn breadcrumb() -> Style {
+    Style::new().fg(SUBTLE)
+}
+
+pub fn breadcrumb_separator() -> Style {
+    Style::new().fg(MUTED)
+}
+
+pub fn breadcrumb_current() -> Style {
+    Style::new().fg(TEXT).add_modifier(Modifier::BOLD)
+}
+
 pub fn hint_label() -> Style {
     Style::new().fg(MUTED)
 }

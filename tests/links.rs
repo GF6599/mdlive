@@ -7,10 +7,16 @@ use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
 use ratatui::buffer::Buffer;
 use unicode_width::UnicodeWidthStr;
 
+mod common;
+
+use common::HEADER_ROWS;
+
 const URL: &str = "https://example.com/mdlive";
 
+/// The whole screen, with `height` rows under the breadcrumb row. Link areas are in screen rows,
+/// so the breadcrumb row stays in the buffer.
 fn draw(viewer: &mut Viewer, width: u16, height: u16) -> Buffer {
-    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(width, height + HEADER_ROWS)).unwrap();
     terminal.draw(|frame| viewer.draw(frame)).unwrap();
     terminal.backend().buffer().clone()
 }

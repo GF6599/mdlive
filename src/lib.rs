@@ -1,3 +1,4 @@
+mod breadcrumb;
 mod contents;
 mod diagrams;
 mod document;
@@ -249,7 +250,8 @@ impl Viewer {
     pub fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
         frame.buffer_mut().set_style(area, theme::page());
-        let [body, bar, status] = Layout::vertical([
+        let [header, body, bar, status] = Layout::vertical([
+            Constraint::Length(1),
             Constraint::Fill(1),
             Constraint::Length(1),
             Constraint::Length(1),
@@ -321,6 +323,9 @@ impl Viewer {
             popup.draw(frame, *area);
         }
 
+        let sections =
+            breadcrumb::sections(self.document.headings(), self.document.heading_at(self.top));
+        breadcrumb::draw(frame, header, &self.title, &sections);
         hint_bar::draw(frame, bar, &hint_bar::hints_for(&self.mode()));
 
         frame.buffer_mut().set_style(status, theme::status());
