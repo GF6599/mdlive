@@ -19,7 +19,7 @@ impl Popup {
     /// The popup for the keys typed so far, or none when no binding starts with them, as with a
     /// contents hint letter.
     pub fn of(keys: &KeyReader) -> Option<Self> {
-        let entries: Vec<_> = next_keys(keys.prefix()?)
+        let entries: Vec<_> = next_keys(keys.prefix()?, keys.focus)
             .into_iter()
             .map(|(key, action)| (key.label(), action.label()))
             .collect();

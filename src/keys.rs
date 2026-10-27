@@ -41,6 +41,36 @@ pub enum Command {
     ToggleHelp,
     Back,
     Forward,
+    ToggleTree,
+    OpenEntry,
+    CloseFolder,
+    /// Escape with no keys typed toward a command, which leaves whatever has the keys.
+    Cancel,
+}
+
+/// What the keys act on: the page, or the file tree while it has them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Focus {
+    #[default]
+    Page,
+    Tree,
+}
+
+/// Where a binding acts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Scope {
+    Both,
+    Page,
+    Tree,
+}
+
+impl Scope {
+    fn reaches(self, focus: Focus) -> bool {
+        matches!(
+            (self, focus),
+            (Self::Both, _) | (Self::Page, Focus::Page) | (Self::Tree, Focus::Tree)
+        )
+    }
 }
 
 /// A heading of the help screen, in the order the screen shows them.
@@ -103,6 +133,9 @@ pub enum Action {
     ToggleHelp,
     Back,
     Forward,
+    ToggleTree,
+    OpenEntry,
+    CloseFolder,
 }
 
 impl Action {
@@ -133,6 +166,9 @@ impl Action {
             Self::ToggleHelp => "show the keys",
             Self::Back => "back to the last file",
             Self::Forward => "forward again",
+            Self::ToggleTree => "open, enter or close the file tree",
+            Self::OpenEntry => "open folder or read file, in the tree",
+            Self::CloseFolder => "close folder, in the tree",
         }
     }
 
@@ -143,7 +179,9 @@ impl Action {
                 Group::Search
             }
             Self::ToggleFold | Self::OpenAllFolds | Self::CloseAllFolds => Group::Folds,
-            Self::Back | Self::Forward => Group::Files,
+            Self::Back | Self::Forward | Self::ToggleTree | Self::OpenEntry | Self::CloseFolder => {
+                Group::Files
+            }
             Self::Quit | Self::ToggleHelp => Group::Other,
             _ => Group::Move,
         }
@@ -182,6 +220,9 @@ impl Action {
             Self::ToggleHelp => Command::ToggleHelp,
             Self::Back => Command::Back,
             Self::Forward => Command::Forward,
+            Self::ToggleTree => Command::ToggleTree,
+            Self::OpenEntry => Command::OpenEntry,
+            Self::CloseFolder => Command::CloseFolder,
         }
     }
 }
@@ -230,6 +271,8 @@ impl Key {
             (KeyCode::PageDown, _) => String::from("PgDn"),
             (KeyCode::PageUp, _) => String::from("PgUp"),
             (KeyCode::Enter, _) => String::from("Enter"),
+            (KeyCode::Right, _) => String::from("→"),
+            (KeyCode::Left, _) => String::from("←"),
             (code, _) => code.to_string(),
         }
     }
@@ -238,10 +281,31 @@ impl Key {
 struct Binding {
     keys: &'static [Key],
     action: Action,
+    scope: Scope,
 }
 
 const fn bind(keys: &'static [Key], action: Action) -> Binding {
-    Binding { keys, action }
+    Binding {
+        keys,
+        action,
+        scope: Scope::Both,
+    }
+}
+
+const fn page(keys: &'static [Key], action: Action) -> Binding {
+    Binding {
+        keys,
+        action,
+        scope: Scope::Page,
+    }
+}
+
+const fn tree(keys: &'static [Key], action: Action) -> Binding {
+    Binding {
+        keys,
+        action,
+        scope: Scope::Tree,
+    }
 }
 
 /// Every key sequence the reader accepts. The first binding of an action is the one a hint shows.
@@ -264,47 +328,56 @@ const BINDINGS: &[Binding] = &[
     bind(&[Key::named(KeyCode::Home)], Action::Top),
     bind(&[Key::plain('G')], Action::End),
     bind(&[Key::named(KeyCode::End)], Action::End),
-    bind(&[Key::plain(']'), Key::plain(']')], Action::NextHeading),
-    bind(&[Key::plain('['), Key::plain('[')], Action::PreviousHeading),
-    bind(&[Key::plain('}')], Action::NextBlock),
-    bind(&[Key::plain('{')], Action::PreviousBlock),
-    bind(&[Key::plain('t')], Action::ToggleContents),
-    bind(&[Key::plain('/')], Action::SearchForward),
-    bind(&[Key::plain('?')], Action::SearchBackward),
-    bind(&[Key::plain('n')], Action::NextMatch),
-    bind(&[Key::plain('N')], Action::PreviousMatch),
-    bind(&[Key::plain('z'), Key::plain('a')], Action::ToggleFold),
-    bind(&[Key::plain('z'), Key::plain('R')], Action::OpenAllFolds),
-    bind(&[Key::plain('z'), Key::plain('M')], Action::CloseAllFolds),
+    page(&[Key::plain(']'), Key::plain(']')], Action::NextHeading),
+    page(&[Key::plain('['), Key::plain('[')], Action::PreviousHeading),
+    page(&[Key::plain('}')], Action::NextBlock),
+    page(&[Key::plain('{')], Action::PreviousBlock),
+    page(&[Key::plain('t')], Action::ToggleContents),
+    page(&[Key::plain('/')], Action::SearchForward),
+    page(&[Key::plain('?')], Action::SearchBackward),
+    page(&[Key::plain('n')], Action::NextMatch),
+    page(&[Key::plain('N')], Action::PreviousMatch),
+    page(&[Key::plain('z'), Key::plain('a')], Action::ToggleFold),
+    page(&[Key::plain('z'), Key::plain('R')], Action::OpenAllFolds),
+    page(&[Key::plain('z'), Key::plain('M')], Action::CloseAllFolds),
     bind(&[Key::plain('g'), Key::plain('?')], Action::ToggleHelp),
     bind(&[Key::named(KeyCode::F(1))], Action::ToggleHelp),
     bind(&[Key::control('o')], Action::Back),
     bind(&[Key::control('i')], Action::Forward),
     bind(&[Key::named(KeyCode::Tab)], Action::Forward),
+    bind(&[Key::plain('-')], Action::ToggleTree),
+    tree(&[Key::plain('l')], Action::OpenEntry),
+    tree(&[Key::named(KeyCode::Enter)], Action::OpenEntry),
+    tree(&[Key::named(KeyCode::Right)], Action::OpenEntry),
+    tree(&[Key::plain('h')], Action::CloseFolder),
+    tree(&[Key::named(KeyCode::Left)], Action::CloseFolder),
 ];
 
 /// Quits from anywhere, even partway through a key sequence.
 const QUIT_ANYWHERE: Key = Key::control('c');
-/// Drops the keys typed toward a command, or quits when there are none.
-const CANCEL: Key = Key::named(KeyCode::Esc);
+/// Drops the keys typed toward a command, or leaves whatever has the keys when there are none.
+pub const CANCEL: Key = Key::named(KeyCode::Esc);
 
-fn action_of(keys: &[Key]) -> Option<Action> {
+fn bindings_for(focus: Focus) -> impl Iterator<Item = &'static Binding> {
     BINDINGS
         .iter()
+        .filter(move |binding| binding.scope.reaches(focus))
+}
+
+fn action_of(keys: &[Key], focus: Focus) -> Option<Action> {
+    bindings_for(focus)
         .find(|binding| binding.keys == keys)
         .map(|binding| binding.action)
 }
 
-fn starts_a_sequence(key: Key) -> bool {
-    BINDINGS
-        .iter()
-        .any(|binding| binding.keys.len() > 1 && binding.keys[0] == key)
+fn starts_a_sequence(key: Key, focus: Focus) -> bool {
+    bindings_for(focus).any(|binding| binding.keys.len() > 1 && binding.keys[0] == key)
 }
 
-/// The keys that can follow `prefix`, each with what it does, in the order of the table.
-pub fn next_keys(prefix: Key) -> Vec<(Key, Action)> {
-    BINDINGS
-        .iter()
+/// The keys that can follow `prefix` under `focus`, each with what it does, in the order of the
+/// table.
+pub fn next_keys(prefix: Key, focus: Focus) -> Vec<(Key, Action)> {
+    bindings_for(focus)
         .filter_map(|binding| match binding.keys {
             [first, second] if *first == prefix => Some((*second, binding.action)),
             _ => None,
@@ -339,7 +412,10 @@ pub fn key_list(group: Group) -> Vec<(String, &'static str)> {
         )),
         Group::Other => list.extend([
             (QUIT_ANYWHERE.label(), Action::Quit.label()),
-            (CANCEL.label(), "drop typed keys, or quit"),
+            (
+                CANCEL.label(),
+                "drop typed keys, leave the tree or help, or quit",
+            ),
         ]),
         _ => {}
     }
@@ -379,6 +455,7 @@ pub struct KeyReader {
     prefix: Option<Key>,
     /// How many contents entries the hint letters reach, 0 while the contents is closed.
     pub hint_targets: usize,
+    pub focus: Focus,
 }
 
 impl KeyReader {
@@ -390,11 +467,11 @@ impl KeyReader {
         if key == CANCEL {
             let pending = self.count.is_some() || self.prefix.is_some();
             self.clear();
-            return (!pending).then_some(Command::Quit);
+            return (!pending).then_some(Command::Cancel);
         }
         if let Some(prefix) = self.prefix.take() {
             let count = self.count.take();
-            if let Some(action) = action_of(&[prefix, key]) {
+            if let Some(action) = action_of(&[prefix, key], self.focus) {
                 return Some(action.command(count));
             }
             return match (prefix.code, key.code) {
@@ -432,10 +509,10 @@ impl KeyReader {
         }
 
         let count = self.count.take();
-        if let Some(action) = action_of(&[key]) {
+        if let Some(action) = action_of(&[key], self.focus) {
             return Some(action.command(count));
         }
-        if starts_a_sequence(key) {
+        if starts_a_sequence(key, self.focus) {
             self.count = count;
             self.prefix = Some(key);
         }

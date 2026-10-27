@@ -148,6 +148,14 @@ pub fn hint() -> Style {
     Style::new().fg(GOLD)
 }
 
+pub fn tree_folder() -> Style {
+    Style::new().fg(FOAM)
+}
+
+pub fn tree_cursor() -> Style {
+    Style::new().bg(HL_MED)
+}
+
 pub fn hint_label() -> Style {
     Style::new().fg(MUTED)
 }

@@ -7,6 +7,7 @@ description = "A terminal preview of a Markdown file that follows each save"
 
 [dependencies]
 crossterm = "0.29"
+ignore = "0.4"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 mermaid-rs-renderer = { version = "0.3.1", default-features = false }
 mermaid-text = "0.57"

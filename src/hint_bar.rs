@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
-use crate::keys::{Action, HINT_LETTERS_LISTED, Key, hints, keys_of};
+use crate::keys::{Action, CANCEL, HINT_LETTERS_LISTED, Key, hints, keys_of};
 use crate::theme;
 
 const GAP: &str = "  ";
@@ -14,6 +14,7 @@ const GAP: &str = "  ";
 pub enum Mode {
     TypingSearch,
     Help,
+    Tree,
     Reading {
         headings_in_contents: Option<usize>,
         search_active: bool,
@@ -41,13 +42,23 @@ pub fn hints_for(mode: &Mode) -> Vec<Hint> {
         Mode::TypingSearch => {
             return vec![
                 hint(Key::named(KeyCode::Enter).label(), "search"),
-                hint(Key::named(KeyCode::Esc).label(), "cancel"),
+                hint(CANCEL.label(), "cancel"),
             ];
         }
         Mode::Help => {
             return vec![
                 pair(Action::Down, Action::Up, "scroll"),
                 hint(keys_of(Action::Quit), "close"),
+            ];
+        }
+        Mode::Tree => {
+            return vec![
+                pair(Action::Down, Action::Up, "move"),
+                hint(keys_of(Action::OpenEntry), "open"),
+                hint(keys_of(Action::CloseFolder), "close"),
+                hint(CANCEL.label(), "page"),
+                hint(keys_of(Action::ToggleTree), "close tree"),
+                hint(keys_of(Action::Quit), "quit"),
             ];
         }
         Mode::Reading {
@@ -72,18 +83,19 @@ pub fn hints_for(mode: &Mode) -> Vec<Hint> {
         None => "contents",
     };
     let contents = hint(keys_of(Action::ToggleContents), contents_label);
+    let files = hint(keys_of(Action::ToggleTree), "files");
     let scroll = pair(Action::Down, Action::Up, "scroll");
     let help = hint(keys_of(Action::ToggleHelp), "help");
     let back = can_go_back.then(|| hint(keys_of(Action::Back), "back"));
     if headings_in_contents.is_some() {
         bar.extend(
-            [Some(contents), Some(scroll), Some(help), back]
+            [Some(contents), Some(scroll), Some(help), back, Some(files)]
                 .into_iter()
                 .flatten(),
         );
     } else {
         bar.extend(
-            [Some(scroll), Some(help), back, Some(contents)]
+            [Some(scroll), Some(help), back, Some(contents), Some(files)]
                 .into_iter()
                 .flatten(),
         );

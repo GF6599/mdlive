@@ -71,7 +71,7 @@ pub fn draw(frame: &mut Frame, area: Rect, headings: &[Heading], current: Option
 }
 
 /// Cuts `text` to `width` columns, ending in an ellipsis when it had to cut.
-fn fit(text: &str, width: usize) -> String {
+pub fn fit(text: &str, width: usize) -> String {
     if text.width() <= width {
         return text.to_string();
     }

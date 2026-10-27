@@ -745,7 +745,7 @@ fn shows_the_keys_for_what_the_reader_is_doing_in_a_bar() {
     // Then: the bar names the reading keys, the fold key because the page has a fold, and quit
     assert_eq!(
         hint_bar(&buffer),
-        " j/k scroll  g? help  t contents  ]]/[[ section  / search  za fold  C-d/C-u half page  q quit"
+        " j/k scroll  g? help  t contents  - files  ]]/[[ section  / search  za fold  C-d/C-u half page  q quit"
     );
     // And: each key stands out from its label
     let (x, y) = find(&buffer, "j/k scroll");
@@ -868,7 +868,7 @@ fn lists_every_key_on_a_help_screen() {
         ("za", "open or close fold"),
         ("g?, F1", "show the keys"),
         ("C-c", "quit"),
-        ("Esc", "drop typed keys, or quit"),
+        ("Esc", "drop typed keys, leave the tree or help, or quit"),
     ] {
         assert!(
             shown.iter().any(|row| row
@@ -893,7 +893,12 @@ fn lists_every_key_on_a_help_screen() {
     type_keys(&mut viewer, "G");
     // Then: the list stops at its last entry instead of scrolling past it
     let shown = body(&draw(&mut viewer, 80, 12));
-    assert!(shown.last().unwrap().contains("drop typed keys, or quit"));
+    assert!(
+        shown
+            .last()
+            .unwrap()
+            .contains("drop typed keys, leave the tree or help, or quit")
+    );
 
     // When: the reader presses t
     let shown = rows(&draw(&mut viewer, 80, 12));

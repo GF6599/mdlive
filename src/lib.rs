@@ -13,6 +13,7 @@ mod pictures;
 mod search;
 mod table;
 pub mod theme;
+mod tree;
 mod watch;
 mod which_key;
 mod wrap;
@@ -32,9 +33,10 @@ use crate::diagrams::Diagrams;
 use crate::document::Document;
 use crate::folds::Folds;
 pub use crate::hyperlink::{LinkArea, hyperlink_cells};
-use crate::keys::{Command, KeyReader};
+use crate::keys::{Command, Focus, KeyReader};
 use crate::pictures::Pictures;
 use crate::search::{Match, find_all};
+use crate::tree::{Tree, root_of};
 pub use crate::watch::{FileWatch, OpenFileWatch, watch_file};
 use crate::which_key::Popup;
 
@@ -79,6 +81,8 @@ pub struct Viewer {
     contents_open: Option<bool>,
     /// The first row of the help screen in view, while it is open.
     help_top: Option<usize>,
+    /// The file tree, while it is open in place of the contents.
+    tree: Option<Tree>,
     folds: Folds,
     /// The search being typed in the status line.
     prompt: Option<Search>,
@@ -107,6 +111,7 @@ impl Viewer {
             keys: KeyReader::default(),
             contents_open: None,
             help_top: None,
+            tree: None,
             folds: Folds::default(),
             prompt: None,
             search: None,
@@ -218,7 +223,7 @@ impl Viewer {
         if self.contents_open.is_none() {
             self.contents_open = Some(self.contents_fit_at_start(body.width));
         }
-        let panel = self.contents_is_open().then(|| Rect {
+        let panel = (self.tree.is_some() || self.contents_is_open()).then(|| Rect {
             width: contents::WIDTH.min(body.width),
             ..body
         });
@@ -260,9 +265,16 @@ impl Viewer {
         };
         self.links = self.links_on_screen(text, panel, covered);
         self.draw_pictures(frame, text, panel, covered);
-        if let Some(panel) = panel {
-            let current = self.document.heading_at(self.top);
-            contents::draw(frame, panel, self.document.headings(), current);
+        match (&mut self.tree, panel) {
+            (Some(tree), Some(panel)) => {
+                let focused = self.keys.focus == Focus::Tree;
+                tree.draw(frame, panel, Some(&self.path), focused);
+            }
+            (None, Some(panel)) => {
+                let current = self.document.heading_at(self.top);
+                contents::draw(frame, panel, self.document.headings(), current);
+            }
+            _ => {}
         }
         if let Some(top) = self.help_top {
             help::draw(frame, body, top);
@@ -425,7 +437,7 @@ impl Viewer {
         }
         self.notice = None;
         let half_page = (self.page / 2).max(1);
-        self.keys.hint_targets = if self.contents_is_open() {
+        self.keys.hint_targets = if self.contents_is_open() && self.tree.is_none() {
             self.document.headings().len()
         } else {
             0
@@ -437,8 +449,13 @@ impl Viewer {
             self.help_top = scroll_help(command, top, half_page, self.page);
             return Flow::Continue;
         }
+        if self.keys.focus == Focus::Tree {
+            return self.handle_tree_command(command, half_page);
+        }
         match command {
-            Command::Quit => return Flow::Quit,
+            Command::Quit | Command::Cancel => return Flow::Quit,
+            Command::ToggleTree => self.enter_tree(),
+            Command::OpenEntry | Command::CloseFolder => {}
             Command::ToggleHelp => self.help_top = Some(0),
             Command::Back => {
                 self.step_history(|viewer| &mut viewer.back, |viewer| &mut viewer.forward)
@@ -638,12 +655,65 @@ impl Viewer {
         }
     }
 
+    /// Gives the tree the keys, opening it at the root of the page's file when it is closed.
+    fn enter_tree(&mut self) {
+        if self.tree.is_none() {
+            let mut tree = Tree::scan(&root_of(&self.path));
+            tree.reveal(&self.path);
+            self.tree = Some(tree);
+        }
+        self.keys.focus = Focus::Tree;
+    }
+
+    fn handle_tree_command(&mut self, command: Command, half_page: usize) -> Flow {
+        let Some(tree) = &mut self.tree else {
+            self.keys.focus = Focus::Page;
+            return Flow::Continue;
+        };
+        match command {
+            Command::Quit => return Flow::Quit,
+            Command::Cancel => self.keys.focus = Focus::Page,
+            Command::ToggleTree => {
+                self.tree = None;
+                self.keys.focus = Focus::Page;
+            }
+            Command::Down(times) => tree.move_down(times),
+            Command::Up(times) => tree.move_up(times),
+            Command::HalfPageDown(times) => tree.move_down(half_page.saturating_mul(times)),
+            Command::HalfPageUp(times) => tree.move_up(half_page.saturating_mul(times)),
+            Command::PageDown(times) => tree.move_down(self.page.saturating_mul(times)),
+            Command::PageUp(times) => tree.move_up(self.page.saturating_mul(times)),
+            Command::Top | Command::SourceLine(_) => tree.move_up(usize::MAX),
+            Command::End => tree.move_down(usize::MAX),
+            Command::CloseFolder => tree.close_folder(),
+            Command::OpenEntry => {
+                if let Some(file) = tree.open_entry()
+                    && !same_file(&file, &self.path)
+                {
+                    self.open(&file);
+                }
+            }
+            Command::ToggleHelp => self.help_top = Some(0),
+            Command::Back => {
+                self.step_history(|viewer| &mut viewer.back, |viewer| &mut viewer.forward);
+            }
+            Command::Forward => {
+                self.step_history(|viewer| &mut viewer.forward, |viewer| &mut viewer.back);
+            }
+            _ => {}
+        }
+        Flow::Continue
+    }
+
     fn mode(&self) -> hint_bar::Mode {
         if self.prompt.is_some() {
             return hint_bar::Mode::TypingSearch;
         }
         if self.help_top.is_some() {
             return hint_bar::Mode::Help;
+        }
+        if self.keys.focus == Focus::Tree {
+            return hint_bar::Mode::Tree;
         }
         hint_bar::Mode::Reading {
             headings_in_contents: self
@@ -706,7 +776,7 @@ impl Viewer {
 /// command does nothing while it is open.
 fn scroll_help(command: Command, top: usize, half_page: usize, page: usize) -> Option<usize> {
     match command {
-        Command::Quit | Command::ToggleHelp => None,
+        Command::Quit | Command::ToggleHelp | Command::Cancel => None,
         Command::Down(times) => Some(top.saturating_add(times)),
         Command::Up(times) => Some(top.saturating_sub(times)),
         Command::HalfPageDown(times) => Some(top.saturating_add(half_page.saturating_mul(times))),
@@ -724,4 +794,11 @@ pub fn folder_of(path: &Path) -> &Path {
     path.parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or(Path::new("."))
+}
+
+fn same_file(one: &Path, other: &Path) -> bool {
+    match (one.canonicalize(), other.canonicalize()) {
+        (Ok(one), Ok(other)) => one == other,
+        _ => one == other,
+    }
 }
