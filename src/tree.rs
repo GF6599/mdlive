@@ -296,6 +296,23 @@ impl Tree {
         }
     }
 
+    /// Acts on the row drawn on screen row `y` of a tree drawn in `area`: puts the cursor on it,
+    /// opens or closes a folder, and answers a file for the page to read.
+    pub fn click(&mut self, area: Rect, y: u16) -> Option<PathBuf> {
+        let inner = Block::new().borders(Borders::ALL).inner(area);
+        let row = self.top + usize::from(y.checked_sub(inner.y)?);
+        let entry = &self.entries[*self.rows().get(row)?];
+        let (path, folder) = (entry.path.clone(), entry.folder);
+        self.cursor = row;
+        if !folder {
+            return Some(path);
+        }
+        if !self.open_folders.remove(&path) {
+            self.open_folders.insert(path);
+        }
+        None
+    }
+
     /// Draws the rows on view in `area`, marking `current`, the file on the page, and showing the
     /// cursor while the tree has the keys.
     pub fn draw(&mut self, frame: &mut Frame, area: Rect, current: Option<&Path>, focused: bool) {

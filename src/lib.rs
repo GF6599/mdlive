@@ -21,9 +21,9 @@ mod wrap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
@@ -48,6 +48,8 @@ const MAX_TEXT_WIDTH: u16 = 100;
 const MIN_TEXT_BESIDE_CONTENTS: u16 = 40;
 /// A page with fewer headings than this reads fine without the contents, so it starts closed.
 const MIN_HEADINGS_TO_OPEN_CONTENTS: usize = 3;
+/// How far one turn of the wheel moves, as most readers move a page.
+const WHEEL_LINES: usize = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flow {
@@ -102,6 +104,8 @@ pub struct Viewer {
     /// The link index of the link that Enter follows.
     marked_link: Option<usize>,
     opener: Opener,
+    /// Where the last frame drew the contents or the tree, for a click to find what it hit.
+    panel: Option<Rect>,
     forward: Vec<Place>,
 }
 
@@ -132,6 +136,7 @@ impl Viewer {
             back: Vec::new(),
             marked_link: None,
             opener: Opener(None),
+            panel: None,
             forward: Vec::new(),
         }
     }
@@ -256,6 +261,7 @@ impl Viewer {
             width: contents::WIDTH.min(body.width),
             ..body
         });
+        self.panel = panel;
         let page = match panel {
             Some(panel) if body.width - panel.width >= MIN_TEXT_BESIDE_CONTENTS + 2 => Rect {
                 x: body.x + panel.width,
@@ -695,6 +701,70 @@ impl Viewer {
                 height: 1,
             };
             frame.buffer_mut().set_style(area, style);
+        }
+    }
+
+    /// The wheel moves what is under the pointer, the tree or the page, and a click acts on a
+    /// contents entry or a tree row, and gives the keys to the tree or the page it lands on.
+    pub fn handle_mouse(&mut self, event: MouseEvent) -> Flow {
+        if self.prompt.is_some() || self.tree.as_ref().is_some_and(Tree::is_typing) {
+            return Flow::Continue;
+        }
+        let at = Position::new(event.column, event.row);
+        let panel = self.panel.filter(|panel| panel.contains(at));
+        match event.kind {
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
+                let down = event.kind == MouseEventKind::ScrollDown;
+                if let Some(top) = self.help_top {
+                    self.help_top = Some(if down {
+                        top.saturating_add(WHEEL_LINES)
+                    } else {
+                        top.saturating_sub(WHEEL_LINES)
+                    });
+                } else if let (Some(tree), Some(_)) = (&mut self.tree, panel) {
+                    if down {
+                        tree.move_down(WHEEL_LINES);
+                    } else {
+                        tree.move_up(WHEEL_LINES);
+                    }
+                } else if down {
+                    self.scroll_to(self.top.saturating_add(WHEEL_LINES));
+                } else {
+                    self.scroll_to(self.top.saturating_sub(WHEEL_LINES));
+                }
+            }
+            MouseEventKind::Down(MouseButton::Left) if self.help_top.is_none() => {
+                self.click(panel, event.row);
+            }
+            _ => {}
+        }
+        Flow::Continue
+    }
+
+    fn click(&mut self, panel: Option<Rect>, row: u16) {
+        let Some(panel) = panel else {
+            self.keys.focus = Focus::Page;
+            return;
+        };
+        if let Some(tree) = &mut self.tree {
+            self.keys.focus = Focus::Tree;
+            if let Some(file) = tree.click(panel, row)
+                && !self
+                    .path
+                    .as_deref()
+                    .is_some_and(|path| same_file(&file, path))
+            {
+                self.open(&file);
+            }
+            return;
+        }
+        let headings = self.document.headings();
+        let current = self.document.heading_at(self.top);
+        if let Some(line) = contents::entry_at(panel, headings.len(), current, row)
+            .and_then(|entry| headings.get(entry))
+            .map(|heading| heading.line)
+        {
+            self.scroll_to(line);
         }
     }
 

@@ -35,10 +35,7 @@ pub fn draw(frame: &mut Frame, area: Rect, headings: &[Heading], current: Option
         .map(|heading| heading.level)
         .min()
         .unwrap_or(1);
-    let first = current
-        .unwrap_or(0)
-        .saturating_sub(rows / 2)
-        .min(headings.len().saturating_sub(rows));
+    let first = first_entry(rows, headings.len(), current);
     let hints = hints(headings.len());
     let lines: Vec<Line> = headings
         .iter()
@@ -83,4 +80,24 @@ pub fn fit(text: &str, width: usize) -> String {
         cut.push_str(grapheme);
     }
     cut + "…"
+}
+
+/// The entry at the top of a list of `count` entries in `rows` rows, which keeps `current` near
+/// the middle.
+fn first_entry(rows: usize, count: usize, current: Option<usize>) -> usize {
+    current
+        .unwrap_or(0)
+        .saturating_sub(rows / 2)
+        .min(count.saturating_sub(rows))
+}
+
+/// The entry drawn on screen row `y` of a contents drawn in `area`, as `draw` lays it out.
+pub fn entry_at(area: Rect, count: usize, current: Option<usize>, y: u16) -> Option<usize> {
+    let inner = Block::new().borders(Borders::ALL).inner(area);
+    let row = usize::from(y.checked_sub(inner.y)?);
+    if row >= usize::from(inner.height) {
+        return None;
+    }
+    let entry = first_entry(usize::from(inner.height), count, current) + row;
+    (entry < count).then_some(entry)
 }
