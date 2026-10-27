@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 use std::rc::Rc;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use mdlive::{Flow, Viewer, theme};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -173,4 +173,120 @@ fn steps_through_the_links_and_follows_the_marked_one() {
     assert_eq!(press(&mut viewer, KeyCode::Esc), Flow::Continue);
     assert_eq!(selected(&draw(&mut viewer)), "");
     assert_eq!(press(&mut viewer, KeyCode::Esc), Flow::Quit);
+}
+
+/// A screen column of `text` on row `y`, where a click lands on it.
+fn column_of(buffer: &Buffer, y: u16, text: &str) -> u16 {
+    let line = row(buffer, y);
+    let at = line
+        .find(text)
+        .unwrap_or_else(|| panic!("{text:?} not in {line:?}"));
+    u16::try_from(line[..at].chars().count()).unwrap()
+}
+
+/// A left click at `column` and `row`, with the row counted below the breadcrumb.
+fn click(viewer: &mut Viewer, column: u16, row: u16, modifiers: KeyModifiers) {
+    viewer.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row: row + HEADER_ROWS,
+        modifiers,
+    });
+}
+
+/// A plain click on link text follows the link the way Enter follows a marked one, a Ctrl-click
+/// is left to the terminal, and a click beside a link does nothing.
+///
+/// Why it matters: with the mouse captured, the terminal opens a web link only on Ctrl-click and
+/// never a page or heading link, so without this a reader clicks a link and nothing happens.
+#[test]
+fn follows_a_clicked_link() {
+    // Given: a page with a web link, a heading link, a file link and a page link on one line, and
+    // an opener that records what it gets
+    let dir = tempfile::tempdir().unwrap();
+    let filler: String = (1..=12).map(|n| format!("filler {n}\n\n")).collect();
+    write(&dir.path().join("other.md"), "# Other\n");
+    let page = dir.path().join("page.md");
+    write(
+        &page,
+        &format!(
+            "# Page\n\n[web](https://example.com/a) [later](#later-on) [file](file:///etc/hosts) \
+             [other](other.md) plain words\n\n{filler}## Later on\n\n{filler}"
+        ),
+    );
+    let opened = Rc::new(RefCell::new(Vec::new()));
+    let record = Rc::clone(&opened);
+    let mut viewer = Viewer::new("page.md", &fs::read_to_string(&page).unwrap())
+        .with_path(&page)
+        .with_opener(move |url| {
+            record.borrow_mut().push(url.to_string());
+            Ok(())
+        });
+    let buffer = draw(&mut viewer);
+    // The links sit on the row below the rule under the title.
+    const LINKS: u16 = 3;
+
+    // When: the reader clicks the last letter of the web link
+    click(
+        &mut viewer,
+        column_of(&buffer, LINKS, "web") + 2,
+        LINKS,
+        KeyModifiers::NONE,
+    );
+    // Then: the opener gets the web address
+    assert_eq!(*opened.borrow(), ["https://example.com/a"]);
+
+    // When: the reader Ctrl-clicks the web link, which the terminal opens itself
+    click(
+        &mut viewer,
+        column_of(&buffer, LINKS, "web"),
+        LINKS,
+        KeyModifiers::CONTROL,
+    );
+    // Then: the opener does not get it a second time
+    assert_eq!(*opened.borrow(), ["https://example.com/a"]);
+
+    // When: the reader clicks the plain words after the links
+    click(
+        &mut viewer,
+        column_of(&buffer, LINKS, "plain"),
+        LINKS,
+        KeyModifiers::NONE,
+    );
+    // Then: nothing opens, and the page stays at its top
+    assert_eq!(*opened.borrow(), ["https://example.com/a"]);
+    assert_eq!(row(&draw(&mut viewer), 0), " Page");
+
+    // When: the reader clicks the file link
+    click(
+        &mut viewer,
+        column_of(&buffer, LINKS, "file"),
+        LINKS,
+        KeyModifiers::NONE,
+    );
+    // Then: the opener does not get it, and the status line says why
+    assert_eq!(*opened.borrow(), ["https://example.com/a"]);
+    assert!(row(&draw(&mut viewer), HEIGHT - 1).contains("will not open file:"));
+
+    // When: the reader clicks the heading link
+    click(
+        &mut viewer,
+        column_of(&buffer, LINKS, "later"),
+        LINKS,
+        KeyModifiers::NONE,
+    );
+    // Then: the page jumps to the heading
+    assert_eq!(row(&draw(&mut viewer), 0), " Later on");
+
+    // When: the reader goes back to the top and clicks the page link
+    type_keys(&mut viewer, "gg");
+    draw(&mut viewer);
+    click(
+        &mut viewer,
+        column_of(&buffer, LINKS, "other"),
+        LINKS,
+        KeyModifiers::NONE,
+    );
+    // Then: the other page opens
+    assert_eq!(row(&draw(&mut viewer), 0), " Other");
 }

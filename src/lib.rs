@@ -101,6 +101,8 @@ pub struct Viewer {
     /// A note on the last search, such as a wrap at the end of the page.
     notice: Option<(String, Style)>,
     links: Vec<LinkArea>,
+    /// Every link drawn in the last frame, for a click to find the one it hit.
+    link_areas: Vec<LinkArea>,
     pictures: Pictures,
     diagrams: Diagrams,
     back: Vec<Place>,
@@ -134,6 +136,7 @@ impl Viewer {
             current_match: None,
             notice: None,
             links: Vec::new(),
+            link_areas: Vec::new(),
             pictures: Pictures::new(Path::new("."), Picker::halfblocks()),
             diagrams: Diagrams::default(),
             back: Vec::new(),
@@ -303,7 +306,13 @@ impl Viewer {
             Some(_) => Some(body),
             None => popup.as_ref().map(|(area, _)| *area),
         };
-        self.links = self.links_on_screen(text, panel, covered);
+        self.link_areas = self.links_on_screen(text, panel, covered);
+        self.links = self
+            .link_areas
+            .iter()
+            .filter(|link| is_openable(&link.url))
+            .cloned()
+            .collect();
         self.draw_pictures(frame, text, panel, covered);
         match (&mut self.tree, panel) {
             (Some(tree), Some(panel)) => {
@@ -398,7 +407,7 @@ impl Viewer {
         &self.links
     }
 
-    /// The links in view that a click may open, cut where the contents panel covers the page, and
+    /// The links in view, cut where the contents panel covers the page, and
     /// without the ones the `covered` key popup overlaps.
     fn links_on_screen(
         &self,
@@ -410,7 +419,7 @@ impl Viewer {
         self.document
             .links()
             .iter()
-            .filter(|link| rows.contains(&link.line) && is_openable(self.document.url(link)))
+            .filter(|link| rows.contains(&link.line))
             .filter_map(|link| {
                 let x = text.x.checked_add(u16::try_from(link.column).ok()?)?;
                 let right = x.checked_add(u16::try_from(link.width).ok()?)?;
@@ -719,7 +728,7 @@ impl Viewer {
     }
 
     /// The wheel moves what is under the pointer, the tree or the page, and a click acts on a
-    /// contents entry or a tree row, and gives the keys to the tree or the page it lands on.
+    /// contents entry, a tree row or a link, and gives the keys to the tree or the page it lands on.
     pub fn handle_mouse(&mut self, event: MouseEvent) -> Flow {
         if self.prompt.is_some() || self.tree.as_ref().is_some_and(Tree::is_typing) {
             return Flow::Continue;
@@ -748,16 +757,24 @@ impl Viewer {
                 }
             }
             MouseEventKind::Down(MouseButton::Left) if self.help_top.is_none() => {
-                self.click(panel, event.row);
+                self.click(panel, at, event.modifiers);
             }
             _ => {}
         }
         Flow::Continue
     }
 
-    fn click(&mut self, panel: Option<Rect>, row: u16) {
+    /// A Ctrl-click on a link is the terminal's, which opens a web link itself.
+    fn click(&mut self, panel: Option<Rect>, at: Position, modifiers: KeyModifiers) {
+        let row = at.y;
         let Some(panel) = panel else {
             self.keys.focus = Focus::Page;
+            if !modifiers.contains(KeyModifiers::CONTROL)
+                && let Some(link) = self.link_areas.iter().find(|link| link.area.contains(at))
+            {
+                self.marked_link = Some(link.id);
+                self.follow_marked_link();
+            }
             return;
         };
         if let Some(tree) = &mut self.tree {
