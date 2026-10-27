@@ -1,0 +1,63 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  # A dispatch run renders every archive, checksum and the cask, then publishes
+  # nothing, so an action or toolchain upgrade is proven here instead of on a
+  # live tag.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: check
+    # The darwin targets link CoreFoundation, which only the macOS SDK
+    # provides, so the job runs on macOS and zig cross-links the linux
+    # targets instead.
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      # A tag moves, so a compromised maintainer account can repoint one and run
+      # new code in a job holding contents: write and a Homebrew tap token.
+      # Dependabot raises the trailing version comments as pull requests.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          # GoReleaser publishes through the API with GITHUB_TOKEN and only
+          # reads git, so the token stays out of .git/config.
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+
+      # cargo-zigbuild links every target through zig, which the goreleaser
+      # before hook cannot install for itself. Without a version, the action takes
+      # the newest zig, so a tag could link with a zig that no earlier run used.
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.17.0
+          # A cache that an earlier run wrote could hand this job a changed zig,
+          # which then links every binary the release ships.
+          use-cache: false
+
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          version: v2.19.0
+          # A dispatch run renders the archives, checksums and cask that a tag
+          # would publish. `build` would compile the binaries and render none of
+          # them, which is where a template error actually hides.
+          args: ${{ github.event_name == 'workflow_dispatch' && 'release --snapshot --clean --skip=publish' || 'release --clean' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # --skip=publish never reads the tap credential, so a dispatch run
+          # never needs it and never receives it.
+          HOMEBREW_TAP_TOKEN: ${{ github.event_name == 'push' && secrets.HOMEBREW_TAP_TOKEN || '' }}

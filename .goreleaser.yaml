@@ -1,0 +1,76 @@
+version: 2
+
+# `just build` keeps its signed binary in dist/, which `--clean` would delete,
+# so the release builds under the ignored target/ instead.
+dist: target/goreleaser
+
+before:
+  hooks:
+    - rustup default stable
+    - cargo install --locked cargo-zigbuild@0.24.0
+
+builds:
+  - builder: rust
+    binary: mdlive
+    flags:
+      - --release
+      - --locked
+    targets:
+      - x86_64-apple-darwin
+      - aarch64-apple-darwin
+      # musl links every Linux binary statically, so one archive runs on any
+      # distribution, whatever its glibc.
+      - x86_64-unknown-linux-musl
+      - aarch64-unknown-linux-musl
+
+archives:
+  - formats:
+      - tar.gz
+    files:
+      - LICENSE
+      - README.md
+
+release:
+  github:
+    owner: GF6599
+    name: mdlive
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+homebrew_casks:
+  - name: mdlive
+    repository:
+      owner: GF6599
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Casks
+    homepage: https://github.com/GF6599/mdlive
+    description: A terminal preview of a Markdown file that follows each save
+    license: MIT
+    # Homebrew quarantines what a cask downloads, and macOS reports a quarantined
+    # binary that nobody notarized as damaged rather than running it. Notarizing
+    # needs a paid Apple developer account, so the cask clears the attribute.
+    # GoReleaser renders `hooks.post.install` as `postflight`, which Homebrew 6.0
+    # deprecates, so the stanza goes in through `custom_block` instead. GoReleaser
+    # templates the rendered cask one more time. The escape therefore leaves a
+    # literal {{staged_path}} for Homebrew to expand at install time.
+    custom_block: |
+      postflight_steps do
+        on_macos do
+          run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ "{{staged_path}}" }}/mdlive"]
+        end
+      end
+
+changelog:
+  sort: asc
+  # The history is gitmoji, so the filters drop the doc, test, config and CI
+  # commits by their emoji rather than by a conventional-commit prefix.
+  filters:
+    exclude:
+      - "^📝"
+      - "^🧪"
+      - "^✅"
+      - "^🔧"
+      - "^👷"
