@@ -105,7 +105,7 @@ impl Pictures {
     }
 
     /// The cells a picture takes at the size a docs site shows it, shrunk to `width` columns when
-    /// it is wider.
+    /// it is wider, and shrunk further when it would hold more than the pixel budget.
     fn fit(&self, source: Source, pixels_wide: u32, pixels_high: u32, width: usize) -> Placed {
         let font = self.picker.font_size();
         let (cell_wide, cell_high) = (u64::from(font.width.max(1)), u64::from(font.height.max(1)));
@@ -118,6 +118,14 @@ impl Pictures {
             .saturating_mul(cell_wide);
         let (wide, high) = if wide > room {
             (room, high.saturating_mul(room).div_ceil(wide))
+        } else {
+            (wide, high)
+        };
+        let (wide, high) = if wide.saturating_mul(high) > MAX_PICTURE_PIXELS {
+            let narrow = (MAX_PICTURE_PIXELS.saturating_mul(wide) / high)
+                .isqrt()
+                .max(1);
+            (narrow, (MAX_PICTURE_PIXELS / narrow).max(1))
         } else {
             (wide, high)
         };
@@ -209,6 +217,13 @@ const SITE_ROOTS: [&str; 3] = ["public", "static", ""];
 /// pixel, so this keeps a picture as wide against the text as the docs site shows it, whatever
 /// the screen density and font size.
 const PICTURE_PIXELS_PER_COLUMN: u64 = 8;
+
+/// The most pixels the cells of one picture may hold, 2048 squared, which is 16 MiB as RGBA. That
+/// still holds a picture across a full 100-column text on a Retina screen and 50 to 80 rows tall,
+/// by the font size.
+/// Drawing renders every pixel of those cells, so the budget, not the size a file declares, is
+/// what bounds the memory one picture takes.
+const MAX_PICTURE_PIXELS: u64 = 2048 * 2048;
 
 /// A picture taller than this many rows is cut, because the sliced drawing positions rows with a
 /// signed 16-bit offset.
@@ -306,4 +321,54 @@ fn has_scheme(url: &str) -> bool {
             && chars.next().is_some_and(|c| c.is_ascii_alphabetic())
             && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
     })
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use std::path::Path;
+    use std::sync::Arc;
+
+    use ratatui_image::picker::Picker;
+
+    use super::{MAX_PICTURE_PIXELS, Pictures};
+
+    fn svg(wide: u32, high: u32) -> Arc<str> {
+        format!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="{wide}" height="{high}"><rect width="{wide}" height="{high}" fill="#f00"/></svg>"##
+        )
+        .into()
+    }
+
+    /// A picture that would take more pixels than the budget is placed in fewer cells, with its
+    /// shape kept, and a picture inside the budget keeps its size.
+    ///
+    /// Why it matters: drawing renders every pixel of the cells a picture takes, so a 123-byte SVG
+    /// that declares 1000 by 200000 pixels would make the viewer allocate gigabytes.
+    #[test]
+    fn places_a_picture_within_the_pixel_budget() {
+        // Given: pictures drawn in half blocks on 10 by 20 pixel cells, 100 columns of room
+        let pictures = Pictures::new(Path::new("."), Picker::halfblocks());
+        let pixels = |columns: u16, rows: u16| u64::from(columns) * 10 * u64::from(rows) * 20;
+
+        // When: a picture far taller than the budget is placed
+        let tall = pictures.place_svg(svg(1000, 200_000), 100).unwrap();
+        // Then: its cells hold no more pixels than the budget, plus a row and a column of rounding
+        // up to whole cells
+        let rounding = pixels(tall.columns, 1) + pixels(1, tall.rows);
+        assert!(
+            pixels(tall.columns, tall.rows) <= MAX_PICTURE_PIXELS + rounding,
+            "{} by {}",
+            tall.columns,
+            tall.rows
+        );
+        // And: it keeps the shape of 1 wide to 200 high, within a cell of rounding
+        let shape = f64::from(tall.rows) * 20.0 / (f64::from(tall.columns) * 10.0);
+        assert!((shape - 200.0).abs() < 200.0 * 0.05, "shape {shape}");
+
+        // When: a picture inside the budget is placed
+        let small = pictures.place_svg(svg(80, 40), 100).unwrap();
+        // Then: it takes its docs site size, 10 columns and 3 rows
+        assert_eq!((small.columns, small.rows), (10, 3));
+    }
 }
