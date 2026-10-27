@@ -17,7 +17,7 @@ mod watch;
 mod which_key;
 mod wrap;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
@@ -35,7 +35,7 @@ pub use crate::hyperlink::{LinkArea, hyperlink_cells};
 use crate::keys::{Command, KeyReader};
 use crate::pictures::Pictures;
 use crate::search::{Match, find_all};
-pub use crate::watch::{FileWatch, watch_file};
+pub use crate::watch::{FileWatch, OpenFileWatch, watch_file};
 use crate::which_key::Popup;
 
 /// Beyond this width a line of prose gets too long to read, so wider screens centre the text.
@@ -57,8 +57,16 @@ struct Search {
     forward: bool,
 }
 
+/// A page the reader left, and the source line at the top of the screen when they left it.
+#[derive(Debug)]
+struct Place {
+    path: PathBuf,
+    source_line: usize,
+}
+
 #[derive(Debug)]
 pub struct Viewer {
+    path: PathBuf,
     title: String,
     markdown: String,
     document: Document,
@@ -81,11 +89,14 @@ pub struct Viewer {
     links: Vec<LinkArea>,
     pictures: Pictures,
     diagrams: Diagrams,
+    back: Vec<Place>,
+    forward: Vec<Place>,
 }
 
 impl Viewer {
     pub fn new(title: &str, markdown: &str) -> Self {
         Self {
+            path: PathBuf::from(title),
             title: title.to_string(),
             markdown: markdown.to_string(),
             document: Document::default(),
@@ -104,6 +115,85 @@ impl Viewer {
             links: Vec::new(),
             pictures: Pictures::new(Path::new("."), Picker::halfblocks()),
             diagrams: Diagrams::default(),
+            back: Vec::new(),
+            forward: Vec::new(),
+        }
+    }
+
+    /// Names the file the page came from, which the reader goes back to after opening another.
+    #[must_use]
+    pub fn with_path(mut self, path: &Path) -> Self {
+        self.path = path.to_path_buf();
+        self
+    }
+
+    /// The file on screen, which a watch follows to reload the page.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Shows the Markdown file at `path` from its top, and keeps this page for Ctrl-o.
+    pub fn open(&mut self, path: &Path) {
+        match std::fs::read_to_string(path) {
+            Ok(markdown) => {
+                let here = self.place();
+                self.back.push(here);
+                self.forward.clear();
+                self.show(path, &markdown, 0);
+            }
+            Err(error) => self.show_error(&format!("cannot open {}: {error}", path.display())),
+        }
+    }
+
+    /// Goes to the last page of `from` and keeps this page on `to`, the other way through the
+    /// history. A page that cannot be read again stays where it was.
+    fn step_history(
+        &mut self,
+        from: fn(&mut Self) -> &mut Vec<Place>,
+        to: fn(&mut Self) -> &mut Vec<Place>,
+    ) {
+        let Some(place) = from(self).pop() else {
+            return;
+        };
+        match std::fs::read_to_string(&place.path) {
+            Ok(markdown) => {
+                let here = self.place();
+                to(self).push(here);
+                self.show(&place.path, &markdown, place.source_line);
+            }
+            Err(error) => {
+                self.show_error(&format!("cannot open {}: {error}", place.path.display()));
+                from(self).push(place);
+            }
+        }
+    }
+
+    fn place(&self) -> Place {
+        Place {
+            path: self.path.clone(),
+            source_line: self.document.source_line_at(self.top),
+        }
+    }
+
+    /// Puts the page of `path` on screen with `source_line` at the top, and drops what belonged to
+    /// the page before it: its folds, its search and its error.
+    fn show(&mut self, path: &Path, markdown: &str, source_line: usize) {
+        self.path = path.to_path_buf();
+        self.title = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        self.markdown = markdown.to_string();
+        self.error = None;
+        self.folds = Folds::default();
+        self.prompt = None;
+        self.search = None;
+        self.current_match = None;
+        self.pictures.set_base(folder_of(path));
+        self.top = 0;
+        if let Some(width) = self.width {
+            self.render(width);
+            self.top = self.document.screen_line_of(source_line);
         }
     }
 
@@ -350,6 +440,12 @@ impl Viewer {
         match command {
             Command::Quit => return Flow::Quit,
             Command::ToggleHelp => self.help_top = Some(0),
+            Command::Back => {
+                self.step_history(|viewer| &mut viewer.back, |viewer| &mut viewer.forward)
+            }
+            Command::Forward => {
+                self.step_history(|viewer| &mut viewer.forward, |viewer| &mut viewer.back)
+            }
             Command::ToggleContents => self.contents_open = Some(!self.contents_is_open()),
             Command::Search { forward } => {
                 self.prompt = Some(Search {
@@ -554,6 +650,7 @@ impl Viewer {
                 .contents_is_open()
                 .then(|| self.document.headings().len()),
             search_active: self.search.is_some(),
+            can_go_back: !self.back.is_empty(),
             has_folds: !self.document.folds().is_empty(),
         }
     }
@@ -620,4 +717,11 @@ fn scroll_help(command: Command, top: usize, half_page: usize, page: usize) -> O
         Command::End => Some(usize::MAX),
         _ => Some(top),
     }
+}
+
+/// The folder that relative paths in the file at `path` start from.
+pub fn folder_of(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
 }

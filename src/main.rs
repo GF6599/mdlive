@@ -1,10 +1,10 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
-use mdlive::{Flow, LinkArea, Viewer, hyperlink_cells, watch_file};
+use mdlive::{Flow, LinkArea, OpenFileWatch, Viewer, folder_of, hyperlink_cells};
 use ratatui::backend::Backend;
 use ratatui_image::picker::Picker;
 
@@ -38,7 +38,7 @@ fn main() -> ExitCode {
 
     let (sender, inputs) = mpsc::channel();
     let changes = sender.clone();
-    let _watch = match watch_file(&path, DEBOUNCE, move |change| {
+    let watch = match OpenFileWatch::new(&path, DEBOUNCE, move |change| {
         let _ = changes.send(Input::Changed(change));
     }) {
         Ok(watch) => watch,
@@ -47,17 +47,14 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let base = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-
     let mut terminal = ratatui::init();
     // The query reads the terminal's answer from stdin, so it runs before the key reader starts.
     let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
     std::thread::spawn(move || read_terminal(&sender));
-    let viewer = Viewer::new(&title, &markdown).with_images(base, picker);
-    let result = run(&mut terminal, viewer, &path, &inputs);
+    let viewer = Viewer::new(&title, &markdown)
+        .with_images(folder_of(&path), picker)
+        .with_path(&path);
+    let result = run(&mut terminal, viewer, watch, &inputs);
     ratatui::restore();
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -86,7 +83,7 @@ fn read_terminal(sender: &Sender<Input>) {
 fn run(
     terminal: &mut ratatui::DefaultTerminal,
     mut viewer: Viewer,
-    path: &Path,
+    mut watch: OpenFileWatch,
     inputs: &Receiver<Input>,
 ) -> std::io::Result<()> {
     let mut links: Vec<LinkArea> = Vec::new();
@@ -107,9 +104,12 @@ fn run(
                 if viewer.handle_key(key) == Flow::Quit {
                     return Ok(());
                 }
+                if let Err(error) = watch.follow(viewer.path()) {
+                    viewer.show_error(&format!("cannot watch the file: {error}"));
+                }
             }
             Input::Resize => {}
-            Input::Changed(Ok(())) => match std::fs::read_to_string(path) {
+            Input::Changed(Ok(())) => match std::fs::read_to_string(viewer.path()) {
                 Ok(markdown) => viewer.reload(&markdown),
                 Err(error) => viewer.show_error(&format!("cannot read the file: {error}")),
             },

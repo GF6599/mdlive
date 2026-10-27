@@ -55,11 +55,18 @@ impl Pictures {
         if let Color::Rgb(r, g, b) = theme::BASE {
             picker.set_background_color(Some(Rgba([r, g, b, u8::MAX])));
         }
-        Self {
-            base: base.canonicalize().unwrap_or_else(|_| base.to_path_buf()),
+        let mut pictures = Self {
+            base: PathBuf::new(),
             picker,
             loaded: HashMap::new(),
-        }
+        };
+        pictures.set_base(base);
+        pictures
+    }
+
+    /// Reads relative paths from `base` from now on.
+    pub fn set_base(&mut self, base: &Path) {
+        self.base = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
     }
 
     /// Sizes the picture at `url` to fit `width` columns, or says why it cannot be drawn. Only the

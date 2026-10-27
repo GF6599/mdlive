@@ -17,6 +17,7 @@ pub enum Mode {
     Reading {
         headings_in_contents: Option<usize>,
         search_active: bool,
+        can_go_back: bool,
         has_folds: bool,
     },
 }
@@ -36,7 +37,7 @@ fn pair(first: Action, second: Action, label: &'static str) -> Hint {
 
 /// The hints for `mode`, the most useful first, because a narrow bar drops them from the end.
 pub fn hints_for(mode: &Mode) -> Vec<Hint> {
-    let (headings_in_contents, search_active, has_folds) = match *mode {
+    let (headings_in_contents, search_active, can_go_back, has_folds) = match *mode {
         Mode::TypingSearch => {
             return vec![
                 hint(Key::named(KeyCode::Enter).label(), "search"),
@@ -52,8 +53,9 @@ pub fn hints_for(mode: &Mode) -> Vec<Hint> {
         Mode::Reading {
             headings_in_contents,
             search_active,
+            can_go_back,
             has_folds,
-        } => (headings_in_contents, search_active, has_folds),
+        } => (headings_in_contents, search_active, can_go_back, has_folds),
     };
     let mut bar = Vec::new();
     if let Some(count) = headings_in_contents.filter(|count| *count > 0) {
@@ -72,10 +74,19 @@ pub fn hints_for(mode: &Mode) -> Vec<Hint> {
     let contents = hint(keys_of(Action::ToggleContents), contents_label);
     let scroll = pair(Action::Down, Action::Up, "scroll");
     let help = hint(keys_of(Action::ToggleHelp), "help");
+    let back = can_go_back.then(|| hint(keys_of(Action::Back), "back"));
     if headings_in_contents.is_some() {
-        bar.extend([contents, scroll, help]);
+        bar.extend(
+            [Some(contents), Some(scroll), Some(help), back]
+                .into_iter()
+                .flatten(),
+        );
     } else {
-        bar.extend([scroll, help, contents]);
+        bar.extend(
+            [Some(scroll), Some(help), back, Some(contents)]
+                .into_iter()
+                .flatten(),
+        );
     }
     bar.push(pair(
         Action::NextHeading,

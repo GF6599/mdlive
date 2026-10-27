@@ -39,6 +39,8 @@ pub enum Command {
         times: usize,
     },
     ToggleHelp,
+    Back,
+    Forward,
 }
 
 /// A heading of the help screen, in the order the screen shows them.
@@ -48,15 +50,17 @@ pub enum Group {
     Sections,
     Search,
     Folds,
+    Files,
     Other,
 }
 
 impl Group {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Move,
         Self::Sections,
         Self::Search,
         Self::Folds,
+        Self::Files,
         Self::Other,
     ];
 
@@ -66,6 +70,7 @@ impl Group {
             Self::Sections => "Sections",
             Self::Search => "Search",
             Self::Folds => "Folds",
+            Self::Files => "Files",
             Self::Other => "Other",
         }
     }
@@ -96,6 +101,8 @@ pub enum Action {
     OpenAllFolds,
     CloseAllFolds,
     ToggleHelp,
+    Back,
+    Forward,
 }
 
 impl Action {
@@ -124,6 +131,8 @@ impl Action {
             Self::OpenAllFolds => "open all folds",
             Self::CloseAllFolds => "close all folds",
             Self::ToggleHelp => "show the keys",
+            Self::Back => "back to the last file",
+            Self::Forward => "forward again",
         }
     }
 
@@ -134,6 +143,7 @@ impl Action {
                 Group::Search
             }
             Self::ToggleFold | Self::OpenAllFolds | Self::CloseAllFolds => Group::Folds,
+            Self::Back | Self::Forward => Group::Files,
             Self::Quit | Self::ToggleHelp => Group::Other,
             _ => Group::Move,
         }
@@ -170,6 +180,8 @@ impl Action {
             Self::OpenAllFolds => Command::OpenAllFolds,
             Self::CloseAllFolds => Command::CloseAllFolds,
             Self::ToggleHelp => Command::ToggleHelp,
+            Self::Back => Command::Back,
+            Self::Forward => Command::Forward,
         }
     }
 }
@@ -266,6 +278,9 @@ const BINDINGS: &[Binding] = &[
     bind(&[Key::plain('z'), Key::plain('M')], Action::CloseAllFolds),
     bind(&[Key::plain('g'), Key::plain('?')], Action::ToggleHelp),
     bind(&[Key::named(KeyCode::F(1))], Action::ToggleHelp),
+    bind(&[Key::control('o')], Action::Back),
+    bind(&[Key::control('i')], Action::Forward),
+    bind(&[Key::named(KeyCode::Tab)], Action::Forward),
 ];
 
 /// Quits from anywhere, even partway through a key sequence.

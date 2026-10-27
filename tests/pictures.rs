@@ -210,6 +210,29 @@ fn leaves_out_a_picture_under_the_key_popup() {
     assert!(red_rows(&mut viewer) > 0);
 }
 
+/// After the reader opens a page in another folder, its pictures resolve from that folder.
+///
+/// Why it matters: a page names its pictures relative to itself, so a viewer that keeps the folder
+/// of the first page shows every picture of the next page as not found.
+#[test]
+fn reads_the_pictures_of_an_opened_page_from_its_folder() {
+    // Given: a first page, and a second page in a subfolder with a picture beside it
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("first.md"), "first\n").unwrap();
+    picture(&dir.path().join("sub/red.png"), 100, 40, 40, RED, RED);
+    let second = dir.path().join("sub/second.md");
+    std::fs::write(&second, "![red](red.png)\n").unwrap();
+    let mut viewer = viewer(dir.path(), "first\n").with_path(&dir.path().join("first.md"));
+    draw(&mut viewer, 40, 8);
+
+    // When: the reader opens the second page
+    viewer.open(&second);
+    let buffer = draw(&mut viewer, 40, 8);
+
+    // Then: the picture beside it is drawn
+    assert_eq!(painted(&buffer, 0, RED), (1..11).collect::<Vec<_>>());
+}
+
 /// A site-root path finds the picture in the site's public folder or at the repository root, and
 /// an SVG is drawn at its size.
 ///
