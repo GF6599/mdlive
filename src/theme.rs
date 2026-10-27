@@ -17,6 +17,7 @@ pub const FOAM: Color = Color::Rgb(0x9c, 0xcf, 0xd8);
 pub const IRIS: Color = Color::Rgb(0xc4, 0xa7, 0xe7);
 pub const LEAF: Color = Color::Rgb(0x95, 0xb1, 0xac);
 pub const HL_MED: Color = Color::Rgb(0x40, 0x3d, 0x52);
+pub const HL_HIGH: Color = Color::Rgb(0x52, 0x4f, 0x67);
 
 pub fn page() -> Style {
     Style::new().fg(TEXT).bg(BASE)
@@ -174,6 +175,14 @@ pub fn breadcrumb_current() -> Style {
 
 pub fn hint_label() -> Style {
     Style::new().fg(MUTED)
+}
+
+pub fn selection() -> Style {
+    Style::new().bg(HL_MED)
+}
+
+pub fn selection_cursor() -> Style {
+    Style::new().bg(HL_HIGH)
 }
 
 pub fn search_match() -> Style {

@@ -6,6 +6,7 @@ license = "MIT"
 description = "A terminal preview of a Markdown file that follows each save"
 
 [dependencies]
+base64 = "0.23"
 crossterm = "0.29"
 ignore = "0.4"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }

@@ -16,6 +16,7 @@ pub enum Mode {
     Help,
     Tree,
     TypingFilter,
+    Visual,
     Reading(Reading),
 }
 
@@ -66,6 +67,13 @@ pub fn hints_for(mode: &Mode) -> Vec<Hint> {
             hint(CANCEL.label(), "page"),
             hint(keys_of(Action::ToggleTree), "close tree"),
             hint(keys_of(Action::Quit), "quit"),
+        ],
+        Mode::Visual => vec![
+            pair(Action::Down, Action::Up, "extend"),
+            hint(keys_of(Action::CopySelection), "copy"),
+            hint(CANCEL.label(), "cancel"),
+            pair(Action::NextHeading, Action::PreviousHeading, "section"),
+            pair(Action::HalfPageDown, Action::HalfPageUp, "half page"),
         ],
         Mode::Reading(reading) => reading_hints(reading),
     }
@@ -131,6 +139,7 @@ fn reading_hints(reading: &Reading) -> Vec<Hint> {
         bar.push(hint(keys_of(Action::ToggleFold), "fold"));
     }
     bar.push(pair(Action::HalfPageDown, Action::HalfPageUp, "half page"));
+    bar.push(hint(keys_of(Action::SelectLines), "select"));
     bar.push(hint(keys_of(Action::Quit), "quit"));
     bar
 }

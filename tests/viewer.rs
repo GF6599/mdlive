@@ -754,7 +754,7 @@ fn shows_the_keys_for_what_the_reader_is_doing_in_a_bar() {
     // Then: the bar names the reading keys, the fold key because the page has a fold, and quit
     assert_eq!(
         hint_bar(&buffer),
-        " j/k scroll  g? help  t contents  - files  ]]/[[ section  / search  za fold  C-d/C-u half page  q quit"
+        " j/k scroll  g? help  t contents  - files  ]]/[[ section  / search  za fold  C-d/C-u half page  V select  q quit"
     );
     // And: each key stands out from its label
     let (x, y) = find(&buffer, "j/k scroll");
@@ -860,9 +860,9 @@ fn lists_every_key_on_a_help_screen() {
 
     // When: the reader types g?
     type_keys(&mut viewer, "g?");
-    let shown = body(&draw(&mut viewer, 80, 50));
+    let shown = body(&draw(&mut viewer, 80, 60));
     // Then: the screen lists each group, and each key with what it does
-    for group in ["Move", "Sections", "Search", "Folds", "Other"] {
+    for group in ["Move", "Sections", "Search", "Folds", "Select", "Other"] {
         assert!(
             shown.iter().any(|row| row.trim() == group),
             "{group} missing"
@@ -875,6 +875,8 @@ fn lists_every_key_on_a_help_screen() {
         ("a, s, d, …", "go to a section, with the contents open"),
         ("/", "search forward"),
         ("za", "open or close fold"),
+        ("V", "select lines"),
+        ("y", "copy the source of the selected lines"),
         ("g?, F1", "show the keys"),
         ("C-c", "quit"),
         ("Esc", "drop typed keys, leave the tree or help, or quit"),

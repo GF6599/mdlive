@@ -66,6 +66,21 @@ struct Search {
     forward: bool,
 }
 
+/// The page lines selected in visual mode, as screen lines: where the selection started and where
+/// its cursor is.
+#[derive(Debug, Clone, Copy)]
+struct Selection {
+    anchor: usize,
+    cursor: usize,
+}
+
+impl Selection {
+    /// The first and the last selected line, whichever way the cursor moved.
+    fn lines(self) -> (usize, usize) {
+        (self.anchor.min(self.cursor), self.anchor.max(self.cursor))
+    }
+}
+
 /// A page the reader left, and the source line at the top of the screen when they left it.
 #[derive(Debug)]
 struct Place {
@@ -108,7 +123,9 @@ pub struct Viewer {
     back: Vec<Place>,
     /// The link index of the link that Enter follows.
     marked_link: Option<usize>,
-    opener: Opener,
+    opener: Handoff,
+    selection: Option<Selection>,
+    copier: Handoff,
     /// Where the last frame drew the contents or the tree, for a click to find what it hit.
     panel: Option<Rect>,
     forward: Vec<Place>,
@@ -141,7 +158,9 @@ impl Viewer {
             diagrams: Diagrams::default(),
             back: Vec::new(),
             marked_link: None,
-            opener: Opener(None),
+            opener: Handoff(None),
+            selection: None,
+            copier: Handoff(None),
             panel: None,
             forward: Vec::new(),
         }
@@ -150,7 +169,14 @@ impl Viewer {
     /// Hands web and mail addresses to `open`, which starts the program that shows them.
     #[must_use]
     pub fn with_opener(mut self, open: impl FnMut(&str) -> Result<(), String> + 'static) -> Self {
-        self.opener = Opener(Some(Box::new(open)));
+        self.opener = Handoff(Some(Box::new(open)));
+        self
+    }
+
+    /// Hands the Markdown source of the selected lines to `copy`, which puts it on the clipboard.
+    #[must_use]
+    pub fn with_copier(mut self, copy: impl FnMut(&str) -> Result<(), String> + 'static) -> Self {
+        self.copier = Handoff(Some(Box::new(copy)));
         self
     }
 
@@ -298,6 +324,7 @@ impl Viewer {
         frame.render_widget(Paragraph::new(lines), text);
         self.mark_matches(frame, text);
         self.mark_link(frame, text);
+        self.mark_selection(frame, text);
         let popup = Popup::of(&self.keys).map(|popup| (popup.area(body), popup));
         if let Some(top) = self.help_top {
             self.help_top = Some(top.min(help::last_top(body.height)));
@@ -446,6 +473,7 @@ impl Viewer {
     pub fn reload(&mut self, markdown: &str) {
         self.error = None;
         self.marked_link = None;
+        self.leave_visual();
         self.markdown = markdown.to_string();
         self.render_in_place();
     }
@@ -506,8 +534,10 @@ impl Viewer {
             self.help_top = scroll_help(command, top, half_page, self.page);
             return Flow::Continue;
         }
-        if self.keys.focus == Focus::Tree {
-            return self.handle_tree_command(command, half_page);
+        match self.keys.focus {
+            Focus::Tree => return self.handle_tree_command(command, half_page),
+            Focus::Visual => return self.handle_visual_command(command, half_page),
+            Focus::Page => {}
         }
         match command {
             Command::Quit => return Flow::Quit,
@@ -527,7 +557,19 @@ impl Viewer {
                 return Flow::Edit(path, self.document.source_line_at(self.top) + 1);
             }
             Command::ToggleTree => self.enter_tree(),
-            Command::OpenEntry | Command::CloseFolder | Command::FilterTree => {}
+            Command::SelectLines if !self.document.is_empty() => {
+                let cursor = (self.top + self.page / 2).min(self.document.len() - 1);
+                self.selection = Some(Selection {
+                    anchor: cursor,
+                    cursor,
+                });
+                self.keys.focus = Focus::Visual;
+            }
+            Command::OpenEntry
+            | Command::CloseFolder
+            | Command::FilterTree
+            | Command::SelectLines
+            | Command::CopySelection => {}
             Command::ToggleHelp => self.help_top = Some(0),
             Command::Back => {
                 self.step_history(|viewer| &mut viewer.back, |viewer| &mut viewer.forward)
@@ -605,25 +647,150 @@ impl Viewer {
         Flow::Continue
     }
 
-    /// Steps `times` targets from the top line, and goes to `beyond` when the targets run out, as
-    /// vim goes to the first or last line.
+    /// Puts the line `times` targets from the top line at the top.
     fn jump(
         &mut self,
         times: usize,
         beyond: usize,
         step: impl Fn(&Document, usize) -> Option<usize>,
     ) {
-        let mut top = self.top;
+        let top = self.target(self.top, times, beyond, step);
+        self.scroll_to(top);
+    }
+
+    /// The line `times` targets from `from`, or `beyond` when the targets run out, as vim goes to
+    /// the first or last line.
+    fn target(
+        &self,
+        from: usize,
+        times: usize,
+        beyond: usize,
+        step: impl Fn(&Document, usize) -> Option<usize>,
+    ) -> usize {
+        let mut line = from;
         for _ in 0..times {
-            match step(&self.document, top) {
-                Some(line) => top = line,
-                None => {
-                    top = beyond;
-                    break;
-                }
+            match step(&self.document, line) {
+                Some(next) => line = next,
+                None => return beyond,
             }
         }
-        self.scroll_to(top);
+        line
+    }
+
+    /// Moves the cursor of the selection for a movement key and keeps it on screen, copies for y,
+    /// and leaves visual mode for Escape.
+    fn handle_visual_command(&mut self, command: Command, half_page: usize) -> Flow {
+        let Some(selection) = self.selection else {
+            self.leave_visual();
+            return Flow::Continue;
+        };
+        let cursor = selection.cursor;
+        let moved = match command {
+            Command::Quit => return Flow::Quit,
+            Command::Cancel => {
+                self.leave_visual();
+                return Flow::Continue;
+            }
+            Command::CopySelection => {
+                self.leave_visual();
+                self.copy(selection);
+                return Flow::Continue;
+            }
+            Command::Down(times) => cursor.saturating_add(times),
+            Command::Up(times) => cursor.saturating_sub(times),
+            Command::HalfPageDown(times) => cursor.saturating_add(half_page.saturating_mul(times)),
+            Command::HalfPageUp(times) => cursor.saturating_sub(half_page.saturating_mul(times)),
+            Command::PageDown(times) => cursor.saturating_add(self.page.saturating_mul(times)),
+            Command::PageUp(times) => cursor.saturating_sub(self.page.saturating_mul(times)),
+            Command::Top => 0,
+            Command::End => usize::MAX,
+            Command::SourceLine(line) => self.document.screen_line_of(line.saturating_sub(1)),
+            Command::NextHeading(times) => {
+                self.target(cursor, times, usize::MAX, Document::next_heading)
+            }
+            Command::PreviousHeading(times) => {
+                self.target(cursor, times, 0, Document::previous_heading)
+            }
+            Command::NextBlock(times) => {
+                self.target(cursor, times, usize::MAX, Document::next_block)
+            }
+            Command::PreviousBlock(times) => {
+                self.target(cursor, times, 0, Document::previous_block)
+            }
+            _ => return Flow::Continue,
+        };
+        let cursor = moved.min(self.document.len().saturating_sub(1));
+        self.selection = Some(Selection {
+            cursor,
+            ..selection
+        });
+        if cursor < self.top {
+            self.scroll_to(cursor);
+        } else if cursor >= self.top + self.page {
+            self.scroll_to(cursor + 1 - self.page);
+        }
+        Flow::Continue
+    }
+
+    fn leave_visual(&mut self) {
+        self.selection = None;
+        if self.keys.focus == Focus::Visual {
+            self.keys.focus = Focus::Page;
+        }
+    }
+
+    /// Hands the Markdown source behind `selection` to the copier, without the blank lines that
+    /// end it, and names the outcome in the status line.
+    fn copy(&mut self, selection: Selection) {
+        let (first, last) = selection.lines();
+        let range = self.document.source_lines_of(first, last);
+        let lines: Vec<&str> = self
+            .markdown
+            .lines()
+            .skip(range.start)
+            .take(range.len())
+            .collect();
+        let count = lines
+            .iter()
+            .rposition(|line| !line.trim().is_empty())
+            .map_or(0, |at| at + 1);
+        let text = lines[..count].join("\n");
+        let result = match &mut self.copier.0 {
+            Some(copy) => copy(&text),
+            None => Err(String::from("no clipboard")),
+        };
+        match result {
+            Ok(()) => {
+                let plural = if count == 1 { "" } else { "s" };
+                self.notice = Some((format!("copied {count} line{plural}"), theme::status()));
+            }
+            Err(error) => self.show_error(&format!("cannot copy: {error}")),
+        }
+    }
+
+    /// Colours the selected rows on screen across the text, and the cursor row brighter.
+    fn mark_selection(&self, frame: &mut Frame, text: Rect) {
+        let Some(selection) = self.selection else {
+            return;
+        };
+        let (first, last) = selection.lines();
+        let bottom = self.top + usize::from(text.height);
+        for line in first.max(self.top)..=last.min(bottom.saturating_sub(1)) {
+            let Ok(row) = u16::try_from(line - self.top) else {
+                continue;
+            };
+            let style = if line == selection.cursor {
+                theme::selection_cursor()
+            } else {
+                theme::selection()
+            };
+            let area = Rect {
+                y: text.y.saturating_add(row),
+                height: 1,
+                ..text
+            };
+            frame.buffer_mut().set_style(area, style);
+        }
     }
 
     fn edit_prompt(&mut self, key: KeyEvent) {
@@ -766,6 +933,7 @@ impl Viewer {
 
     /// A Ctrl-click on a link is the terminal's, which opens a web link itself.
     fn click(&mut self, panel: Option<Rect>, at: Position, modifiers: KeyModifiers) {
+        self.leave_visual();
         let row = at.y;
         let Some(panel) = panel else {
             self.keys.focus = Focus::Page;
@@ -1000,6 +1168,9 @@ impl Viewer {
         if self.help_top.is_some() {
             return hint_bar::Mode::Help;
         }
+        if self.keys.focus == Focus::Visual {
+            return hint_bar::Mode::Visual;
+        }
         match &self.tree {
             Some(tree) if tree.is_typing() => return hint_bar::Mode::TypingFilter,
             Some(_) if self.keys.focus == Focus::Tree => return hint_bar::Mode::Tree,
@@ -1036,10 +1207,20 @@ impl Viewer {
             return;
         }
         let anchor = self.document.source_line_at(self.top);
+        let selection = self.selection.map(|selection| {
+            (
+                self.document.source_line_at(selection.anchor),
+                self.document.source_line_at(selection.cursor),
+            )
+        });
         self.render(width);
         self.current_match = None;
         if self.width.is_some() {
             self.top = self.document.screen_line_of(anchor);
+            self.selection = selection.map(|(anchor, cursor)| Selection {
+                anchor: self.document.screen_line_of(anchor),
+                cursor: self.document.screen_line_of(cursor),
+            });
         }
         self.width = Some(width);
     }
@@ -1095,17 +1276,18 @@ fn same_file(one: &Path, other: &Path) -> bool {
     }
 }
 
-type OpenUrl = Box<dyn FnMut(&str) -> Result<(), String>>;
+type TakeText = Box<dyn FnMut(&str) -> Result<(), String>>;
 
-/// The program that shows a web or mail address, none in a viewer built without one.
-struct Opener(Option<OpenUrl>);
+/// A program outside the viewer that takes one text, such as an address to show or lines to copy,
+/// none in a viewer built without one.
+struct Handoff(Option<TakeText>);
 
-impl fmt::Debug for Opener {
+impl fmt::Debug for Handoff {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(if self.0.is_some() {
-            "Opener"
+            "Handoff"
         } else {
-            "no Opener"
+            "no Handoff"
         })
     }
 }

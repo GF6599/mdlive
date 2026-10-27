@@ -49,32 +49,37 @@ pub enum Command {
     PreviousLink(usize),
     FollowLink,
     Edit,
+    SelectLines,
+    CopySelection,
     /// Escape with no keys typed toward a command, which leaves whatever has the keys.
     Cancel,
 }
 
-/// What the keys act on: the page, or the file tree while it has them.
+/// What the keys act on: the page, the file tree while it has them, or the selected page lines in
+/// visual mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Focus {
     #[default]
     Page,
     Tree,
+    Visual,
 }
 
-/// Where a binding acts.
+/// The focuses a binding acts in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Scope {
-    Both,
-    Page,
-    Tree,
+struct Scope {
+    page: bool,
+    tree: bool,
+    visual: bool,
 }
 
 impl Scope {
-    fn reaches(self, focus: Focus) -> bool {
-        matches!(
-            (self, focus),
-            (Self::Both, _) | (Self::Page, Focus::Page) | (Self::Tree, Focus::Tree)
-        )
+    const fn reaches(self, focus: Focus) -> bool {
+        match focus {
+            Focus::Page => self.page,
+            Focus::Tree => self.tree,
+            Focus::Visual => self.visual,
+        }
     }
 }
 
@@ -86,17 +91,19 @@ pub enum Group {
     Links,
     Search,
     Folds,
+    Select,
     Files,
     Other,
 }
 
 impl Group {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Move,
         Self::Sections,
         Self::Links,
         Self::Search,
         Self::Folds,
+        Self::Select,
         Self::Files,
         Self::Other,
     ];
@@ -108,6 +115,7 @@ impl Group {
             Self::Links => "Links",
             Self::Search => "Search",
             Self::Folds => "Folds",
+            Self::Select => "Select",
             Self::Files => "Files",
             Self::Other => "Other",
         }
@@ -149,6 +157,8 @@ pub enum Action {
     PreviousLink,
     FollowLink,
     Edit,
+    SelectLines,
+    CopySelection,
 }
 
 impl Action {
@@ -187,6 +197,8 @@ impl Action {
             Self::PreviousLink => "mark the previous link",
             Self::FollowLink => "follow the marked link",
             Self::Edit => "edit the file at this line",
+            Self::SelectLines => "select lines",
+            Self::CopySelection => "copy the source of the selected lines",
         }
     }
 
@@ -205,6 +217,7 @@ impl Action {
             | Self::FilterTree
             | Self::Edit => Group::Files,
             Self::NextLink | Self::PreviousLink | Self::FollowLink => Group::Links,
+            Self::SelectLines | Self::CopySelection => Group::Select,
             Self::Quit | Self::ToggleHelp => Group::Other,
             _ => Group::Move,
         }
@@ -251,6 +264,8 @@ impl Action {
             Self::PreviousLink => Command::PreviousLink(times),
             Self::FollowLink => Command::FollowLink,
             Self::Edit => Command::Edit,
+            Self::SelectLines => Command::SelectLines,
+            Self::CopySelection => Command::CopySelection,
         }
     }
 }
@@ -312,57 +327,74 @@ struct Binding {
     scope: Scope,
 }
 
-const fn bind(keys: &'static [Key], action: Action) -> Binding {
+const fn scoped(
+    keys: &'static [Key],
+    action: Action,
+    page: bool,
+    tree: bool,
+    visual: bool,
+) -> Binding {
     Binding {
         keys,
         action,
-        scope: Scope::Both,
+        scope: Scope { page, tree, visual },
     }
+}
+
+/// A key of the page and the tree.
+const fn bind(keys: &'static [Key], action: Action) -> Binding {
+    scoped(keys, action, true, true, false)
+}
+
+/// A movement key, which also moves the cursor of a selection.
+const fn move_key(keys: &'static [Key], action: Action) -> Binding {
+    scoped(keys, action, true, true, true)
+}
+
+/// A movement key of the page, which also moves the cursor of a selection.
+const fn page_move(keys: &'static [Key], action: Action) -> Binding {
+    scoped(keys, action, true, false, true)
 }
 
 const fn page(keys: &'static [Key], action: Action) -> Binding {
-    Binding {
-        keys,
-        action,
-        scope: Scope::Page,
-    }
+    scoped(keys, action, true, false, false)
 }
 
 const fn tree(keys: &'static [Key], action: Action) -> Binding {
-    Binding {
-        keys,
-        action,
-        scope: Scope::Tree,
-    }
+    scoped(keys, action, false, true, false)
+}
+
+const fn visual(keys: &'static [Key], action: Action) -> Binding {
+    scoped(keys, action, false, false, true)
 }
 
 /// Every key sequence the reader accepts. The first binding of an action is the one a hint shows.
 const BINDINGS: &[Binding] = &[
     bind(&[Key::plain('q')], Action::Quit),
-    bind(&[Key::plain('j')], Action::Down),
-    bind(&[Key::control('e')], Action::Down),
-    bind(&[Key::named(KeyCode::Down)], Action::Down),
-    bind(&[Key::plain('k')], Action::Up),
-    bind(&[Key::control('y')], Action::Up),
-    bind(&[Key::named(KeyCode::Up)], Action::Up),
-    bind(&[Key::control('d')], Action::HalfPageDown),
-    bind(&[Key::control('u')], Action::HalfPageUp),
-    bind(&[Key::control('f')], Action::PageDown),
-    bind(&[Key::plain(' ')], Action::PageDown),
-    bind(&[Key::named(KeyCode::PageDown)], Action::PageDown),
-    bind(&[Key::control('b')], Action::PageUp),
-    bind(&[Key::named(KeyCode::PageUp)], Action::PageUp),
-    bind(&[Key::plain('g'), Key::plain('g')], Action::Top),
-    bind(&[Key::named(KeyCode::Home)], Action::Top),
-    bind(&[Key::plain('G')], Action::End),
-    bind(&[Key::named(KeyCode::End)], Action::End),
-    page(&[Key::plain(']'), Key::plain(']')], Action::NextHeading),
-    page(&[Key::plain('['), Key::plain('[')], Action::PreviousHeading),
+    move_key(&[Key::plain('j')], Action::Down),
+    move_key(&[Key::control('e')], Action::Down),
+    move_key(&[Key::named(KeyCode::Down)], Action::Down),
+    move_key(&[Key::plain('k')], Action::Up),
+    move_key(&[Key::control('y')], Action::Up),
+    move_key(&[Key::named(KeyCode::Up)], Action::Up),
+    move_key(&[Key::control('d')], Action::HalfPageDown),
+    move_key(&[Key::control('u')], Action::HalfPageUp),
+    move_key(&[Key::control('f')], Action::PageDown),
+    move_key(&[Key::plain(' ')], Action::PageDown),
+    move_key(&[Key::named(KeyCode::PageDown)], Action::PageDown),
+    move_key(&[Key::control('b')], Action::PageUp),
+    move_key(&[Key::named(KeyCode::PageUp)], Action::PageUp),
+    move_key(&[Key::plain('g'), Key::plain('g')], Action::Top),
+    move_key(&[Key::named(KeyCode::Home)], Action::Top),
+    move_key(&[Key::plain('G')], Action::End),
+    move_key(&[Key::named(KeyCode::End)], Action::End),
+    page_move(&[Key::plain(']'), Key::plain(']')], Action::NextHeading),
+    page_move(&[Key::plain('['), Key::plain('[')], Action::PreviousHeading),
     page(&[Key::plain(']'), Key::plain('l')], Action::NextLink),
     page(&[Key::plain('['), Key::plain('l')], Action::PreviousLink),
     page(&[Key::named(KeyCode::Enter)], Action::FollowLink),
-    page(&[Key::plain('}')], Action::NextBlock),
-    page(&[Key::plain('{')], Action::PreviousBlock),
+    page_move(&[Key::plain('}')], Action::NextBlock),
+    page_move(&[Key::plain('{')], Action::PreviousBlock),
     page(&[Key::plain('t')], Action::ToggleContents),
     page(&[Key::plain('/')], Action::SearchForward),
     page(&[Key::plain('?')], Action::SearchBackward),
@@ -378,6 +410,8 @@ const BINDINGS: &[Binding] = &[
     bind(&[Key::named(KeyCode::Tab)], Action::Forward),
     bind(&[Key::plain('-')], Action::ToggleTree),
     page(&[Key::plain('E')], Action::Edit),
+    page(&[Key::plain('V')], Action::SelectLines),
+    visual(&[Key::plain('y')], Action::CopySelection),
     tree(&[Key::plain('l')], Action::OpenEntry),
     tree(&[Key::named(KeyCode::Enter)], Action::OpenEntry),
     tree(&[Key::named(KeyCode::Right)], Action::OpenEntry),
@@ -530,6 +564,7 @@ impl KeyReader {
 
         if let KeyCode::Char(letter) = key.code
             && !key.control
+            && self.focus == Focus::Page
             && self.hint_targets > 0
             && HINT_LETTERS.contains(&letter)
         {

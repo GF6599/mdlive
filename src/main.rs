@@ -1,9 +1,11 @@
-use std::io::stdout;
+use std::io::{Write, stdout};
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command, ExitCode, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use crossterm::cursor::{Hide, Show};
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, MouseButton, MouseEventKind,
@@ -59,7 +61,9 @@ fn main() -> ExitCode {
     // would mix mouse events into the answer.
     let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
     capture_mouse();
-    let viewer = Viewer::new(&title, &markdown).with_opener(open_in_system);
+    let viewer = Viewer::new(&title, &markdown)
+        .with_opener(open_in_system)
+        .with_copier(copy_to_clipboard);
     let viewer = if target.is_dir() {
         viewer.with_images(&target, picker).with_tree(&target)
     } else {
@@ -87,17 +91,47 @@ fn open_in_system(url: &str) -> Result<(), String> {
     } else {
         "xdg-open"
     };
-    let status = std::process::Command::new(opener)
+    let status = Command::new(opener)
         .arg(url)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
         .map_err(|error| error.to_string())?;
     if status.success() {
         Ok(())
     } else {
         Err(format!("{opener} failed with {status}"))
+    }
+}
+
+/// Puts `text` on the clipboard: through `pbcopy` on macOS, which needs nothing from the terminal,
+/// and elsewhere through an OSC 52 code, which the terminal passes to the clipboard.
+fn copy_to_clipboard(text: &str) -> Result<(), String> {
+    if !cfg!(target_os = "macos") {
+        let code = format!("\x1b]52;c;{}\x07", STANDARD.encode(text));
+        let mut terminal = stdout();
+        return terminal
+            .write_all(code.as_bytes())
+            .and_then(|()| terminal.flush())
+            .map_err(|error| error.to_string());
+    }
+    let mut pbcopy = Command::new("pbcopy")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("cannot start pbcopy: {error}"))?;
+    let written = pbcopy
+        .stdin
+        .take()
+        .map_or(Ok(()), |mut input| input.write_all(text.as_bytes()));
+    let status = pbcopy.wait().map_err(|error| error.to_string())?;
+    written.map_err(|error| error.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("pbcopy failed with {status}"))
     }
 }
 
@@ -218,7 +252,7 @@ fn edit(
     release_mouse();
     disable_raw_mode()?;
     crossterm::execute!(stdout(), LeaveAlternateScreen, Show)?;
-    let status = std::process::Command::new("sh")
+    let status = Command::new("sh")
         .arg("-c")
         .arg(format!("{editor} \"$@\""))
         .arg("mdlive")

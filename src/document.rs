@@ -194,6 +194,21 @@ impl Document {
         previous(self.blocks.iter().copied(), before)
     }
 
+    /// The source lines behind the screen lines `first` to `last`: from the start of the block
+    /// that holds `first` up to the next block after `last`, or to the end of the source.
+    pub fn source_lines_of(&self, first: usize, last: usize) -> Range<usize> {
+        let start = self.source_line_at(first);
+        let last_block = self.source_line_at(last);
+        let end = self
+            .sources
+            .iter()
+            .skip(last)
+            .find(|&&line| line > last_block)
+            .copied()
+            .unwrap_or(usize::MAX);
+        start..end
+    }
+
     /// The first screen line of the block that holds `source_line`.
     pub fn screen_line_of(&self, source_line: usize) -> usize {
         let after = self.sources.partition_point(|&line| line <= source_line);
