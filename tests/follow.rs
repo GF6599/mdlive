@@ -184,14 +184,20 @@ fn column_of(buffer: &Buffer, y: u16, text: &str) -> u16 {
     u16::try_from(line[..at].chars().count()).unwrap()
 }
 
-/// A left click at `column` and `row`, with the row counted below the breadcrumb.
+/// A left click at `column` and `row`, with the row counted below the breadcrumb: a press, then a
+/// release, as the terminal reports it.
 fn click(viewer: &mut Viewer, column: u16, row: u16, modifiers: KeyModifiers) {
-    viewer.handle_mouse(MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column,
-        row: row + HEADER_ROWS,
-        modifiers,
-    });
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        viewer.handle_mouse(MouseEvent {
+            kind,
+            column,
+            row: row + HEADER_ROWS,
+            modifiers,
+        });
+    }
 }
 
 /// A plain click on link text follows the link the way Enter follows a marked one, a Ctrl-click

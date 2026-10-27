@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use mdlive::{Viewer, theme};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -58,6 +58,16 @@ fn selected_rows(buffer: &Buffer) -> Vec<u16> {
 fn cursor_row(buffer: &Buffer) -> Option<u16> {
     let colour = theme::selection_cursor().bg;
     (0..PAGE_ROWS).find(|&y| (0..buffer.area.width).any(|x| Some(buffer[(x, y)].bg) == colour))
+}
+
+/// A left button event at `column` and `row`, with the row counted below the breadcrumb.
+fn left(viewer: &mut Viewer, kind: fn(MouseButton) -> MouseEventKind, column: u16, row: u16) {
+    viewer.handle_mouse(MouseEvent {
+        kind: kind(MouseButton::Left),
+        column,
+        row: row + HEADER_ROWS,
+        modifiers: KeyModifiers::NONE,
+    });
 }
 
 /// A viewer of `markdown` whose copies land in the returned list.
@@ -213,4 +223,97 @@ fn keeps_the_selection_on_its_text_when_the_page_wraps_again() {
     assert_eq!(row(&buffer, cursor), " last");
     type_keys(&mut viewer, "y");
     assert!(copies.borrow()[0].ends_with("last"));
+}
+
+/// A drag over the page selects the lines it crosses, and the release copies their source.
+///
+/// Why it matters: with the mouse captured, the terminal's own selection takes whole screen rows,
+/// panel and bars included, so a drag must select page lines the way V does.
+#[test]
+fn copies_the_lines_a_drag_crosses_on_release() {
+    // Given: a short page on the screen
+    let (mut viewer, copies) = viewer(PAGE);
+    draw(&mut viewer);
+
+    // When: the reader presses on the paragraph and drags down two rows
+    left(&mut viewer, MouseEventKind::Down, 10, 3);
+    left(&mut viewer, MouseEventKind::Drag, 12, 5);
+    // Then: the three rows are selected, with the cursor where the pointer is
+    let buffer = draw(&mut viewer);
+    assert_eq!(selected_rows(&buffer), [3, 4, 5]);
+    assert_eq!(cursor_row(&buffer), Some(5));
+
+    // When: the reader lets go
+    left(&mut viewer, MouseEventKind::Up, 12, 5);
+    // Then: the source behind the rows is copied, and the selection is gone
+    assert_eq!(
+        *copies.borrow(),
+        ["First paragraph line one\ncontinues here.\n\n- item one"]
+    );
+    assert_eq!(selected_rows(&draw(&mut viewer)), Vec::<u16>::new());
+}
+
+/// A drag that starts on a link selects instead of following it, and a drag past the last page row
+/// scrolls the page and keeps the selection on page rows.
+///
+/// Why it matters: following on the press would open the link of every drag that starts on one,
+/// and a selection that ran onto the hint bar would copy text that is not on the page.
+#[test]
+fn selects_from_a_link_and_scrolls_past_the_bottom() {
+    // Given: a page longer than the screen with a link near its top, and an opener that records
+    let filler: String = (1..=20).map(|n| format!("filler {n}\n\n")).collect();
+    let opened = Rc::new(RefCell::new(Vec::<String>::new()));
+    let record = Rc::clone(&opened);
+    let (viewer, copies) = viewer(&format!("[web](https://example.com/a)\n\n{filler}"));
+    let mut viewer = viewer.with_opener(move |url| {
+        record.borrow_mut().push(url.to_string());
+        Ok(())
+    });
+    draw(&mut viewer);
+
+    // When: the reader presses on the link and drags onto the hint bar row
+    left(&mut viewer, MouseEventKind::Down, 2, 0);
+    left(&mut viewer, MouseEventKind::Drag, 2, PAGE_ROWS);
+    // Then: the page scrolls one line, and the selection ends on the last page row
+    let buffer = draw(&mut viewer);
+    assert_eq!(row(&buffer, 0), "");
+    assert_eq!(cursor_row(&buffer), Some(PAGE_ROWS - 1));
+
+    // When: the reader lets go
+    left(&mut viewer, MouseEventKind::Up, 2, PAGE_ROWS);
+    // Then: the lines are copied, and the link is not followed
+    assert!(copies.borrow()[0].starts_with("[web](https://example.com/a)"));
+    assert_eq!(*opened.borrow(), Vec::<String>::new());
+
+    // When: the reader goes back to the top and clicks the link with a shake along its row
+    type_keys(&mut viewer, "gg");
+    draw(&mut viewer);
+    left(&mut viewer, MouseEventKind::Down, 2, 0);
+    left(&mut viewer, MouseEventKind::Drag, 3, 0);
+    left(&mut viewer, MouseEventKind::Up, 3, 0);
+    // Then: the click follows the link, and nothing more is copied
+    assert_eq!(*opened.borrow(), ["https://example.com/a"]);
+    assert_eq!(copies.borrow().len(), 1);
+}
+
+/// A drag that starts below the end of a short page selects from its last line.
+///
+/// Why it matters: the empty rows under a page hold no text, so a selection over them would mark
+/// rows that copy nothing.
+#[test]
+fn starts_a_drag_below_a_short_page_at_its_last_line() {
+    // Given: a page of three lines on a taller screen
+    let (mut viewer, copies) = viewer("alpha\n\nbeta\n");
+    draw(&mut viewer);
+
+    // When: the reader presses on an empty row under the page and drags to the first row
+    left(&mut viewer, MouseEventKind::Down, 10, PAGE_ROWS - 2);
+    left(&mut viewer, MouseEventKind::Drag, 10, 0);
+    // Then: only the three page rows are selected
+    assert_eq!(selected_rows(&draw(&mut viewer)), [0, 1, 2]);
+
+    // When: the reader lets go
+    left(&mut viewer, MouseEventKind::Up, 10, 0);
+    // Then: the whole page is copied
+    assert_eq!(*copies.borrow(), ["alpha\n\nbeta"]);
 }

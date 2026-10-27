@@ -153,6 +153,8 @@ fn is_used(kind: MouseEventKind) -> bool {
         MouseEventKind::ScrollDown
             | MouseEventKind::ScrollUp
             | MouseEventKind::Down(MouseButton::Left)
+            | MouseEventKind::Drag(MouseButton::Left)
+            | MouseEventKind::Up(MouseButton::Left)
     )
 }
 

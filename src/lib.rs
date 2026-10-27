@@ -81,6 +81,13 @@ impl Selection {
     }
 }
 
+/// Where the left button went down on the page: its screen line, and the link under it.
+#[derive(Debug, Clone, Copy)]
+struct Press {
+    line: usize,
+    link: Option<usize>,
+}
+
 /// A page the reader left, and the source line at the top of the screen when they left it.
 #[derive(Debug)]
 struct Place {
@@ -128,6 +135,9 @@ pub struct Viewer {
     copier: Handoff,
     /// Where the last frame drew the contents or the tree, for a click to find what it hit.
     panel: Option<Rect>,
+    /// Where the last frame drew the page text, for a press or a drag to find its line.
+    text_area: Rect,
+    press: Option<Press>,
     forward: Vec<Place>,
 }
 
@@ -162,6 +172,8 @@ impl Viewer {
             selection: None,
             copier: Handoff(None),
             panel: None,
+            text_area: Rect::default(),
+            press: None,
             forward: Vec::new(),
         }
     }
@@ -322,6 +334,7 @@ impl Viewer {
             .cloned()
             .collect();
         frame.render_widget(Paragraph::new(lines), text);
+        self.text_area = text;
         self.mark_matches(frame, text);
         self.mark_link(frame, text);
         self.mark_selection(frame, text);
@@ -896,6 +909,7 @@ impl Viewer {
 
     /// The wheel moves what is under the pointer, the tree or the page, and a click acts on a
     /// contents entry, a tree row or a link, and gives the keys to the tree or the page it lands on.
+    /// A drag over the page selects lines, and the release copies them.
     pub fn handle_mouse(&mut self, event: MouseEvent) -> Flow {
         if self.prompt.is_some() || self.tree.as_ref().is_some_and(Tree::is_typing) {
             return Flow::Continue;
@@ -926,22 +940,35 @@ impl Viewer {
             MouseEventKind::Down(MouseButton::Left) if self.help_top.is_none() => {
                 self.click(panel, at, event.modifiers);
             }
+            MouseEventKind::Drag(MouseButton::Left) if self.help_top.is_none() => {
+                self.drag(event.row);
+            }
+            MouseEventKind::Up(MouseButton::Left) => self.release(),
             _ => {}
         }
         Flow::Continue
     }
 
-    /// A Ctrl-click on a link is the terminal's, which opens a web link itself.
+    /// A press on the page waits for the release, because it may start a drag. A Ctrl-click on a
+    /// link is the terminal's, which opens a web link itself.
     fn click(&mut self, panel: Option<Rect>, at: Position, modifiers: KeyModifiers) {
         self.leave_visual();
+        self.press = None;
         let row = at.y;
         let Some(panel) = panel else {
             self.keys.focus = Focus::Page;
-            if !modifiers.contains(KeyModifiers::CONTROL)
-                && let Some(link) = self.link_areas.iter().find(|link| link.area.contains(at))
+            let text = self.text_area;
+            if !modifiers.contains(KeyModifiers::CONTROL) && (text.y..text.bottom()).contains(&row)
             {
-                self.marked_link = Some(link.id);
-                self.follow_marked_link();
+                self.press = Some(Press {
+                    line: (self.top + usize::from(row - text.y))
+                        .min(self.document.len().saturating_sub(1)),
+                    link: self
+                        .link_areas
+                        .iter()
+                        .find(|link| link.area.contains(at))
+                        .map(|link| link.id),
+                });
             }
             return;
         };
@@ -964,6 +991,46 @@ impl Viewer {
             .map(|heading| heading.line)
         {
             self.scroll_to(line);
+        }
+    }
+
+    /// Selects from the pressed line to the line at `row`, once the pointer has left the pressed
+    /// line, so a click that shakes stays a click. Past the top or bottom of the page text, the
+    /// page scrolls a line.
+    fn drag(&mut self, row: u16) {
+        let Some(press) = self.press else {
+            return;
+        };
+        let text = self.text_area;
+        if row < text.y {
+            self.scroll_to(self.top.saturating_sub(1));
+        } else if row >= text.bottom() {
+            self.scroll_to(self.top + 1);
+        }
+        let row = row.clamp(text.y, text.bottom().saturating_sub(1));
+        let cursor =
+            (self.top + usize::from(row - text.y)).min(self.document.len().saturating_sub(1));
+        if self.selection.is_none() && cursor == press.line {
+            return;
+        }
+        self.selection = Some(Selection {
+            anchor: press.line,
+            cursor,
+        });
+        self.keys.focus = Focus::Visual;
+    }
+
+    /// Copies what a drag selected, or follows the link a click pressed.
+    fn release(&mut self) {
+        let Some(press) = self.press.take() else {
+            return;
+        };
+        if let Some(selection) = self.selection {
+            self.leave_visual();
+            self.copy(selection);
+        } else if let Some(link) = press.link {
+            self.marked_link = Some(link);
+            self.follow_marked_link();
         }
     }
 
