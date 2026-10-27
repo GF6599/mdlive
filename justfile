@@ -60,7 +60,8 @@ build:
     cp target/release/mdlive dist/
     codesign --force --sign - dist/mdlive
 
-# Install the dist binary to ~/self-made-bin/
+# Install the dist binary to ~/self-made-bin/ as a new file, because macOS kills a binary rewritten in place
 [group('deploy')]
 ship: build
-    cp dist/mdlive ~/self-made-bin/
+    cp dist/mdlive ~/self-made-bin/mdlive.new
+    mv -f ~/self-made-bin/mdlive.new ~/self-made-bin/mdlive
