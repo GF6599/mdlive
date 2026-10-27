@@ -39,7 +39,7 @@ jobs:
         with:
           toolchain: stable
 
-      # cargo-zigbuild links every target through zig, which the goreleaser
+      # cargo-zigbuild links the linux targets through zig, which the goreleaser
       # before hook cannot install for itself. Without a version, the action takes
       # the newest zig, so a tag could link with a zig that no earlier run used.
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1

@@ -10,7 +10,12 @@ before:
     - cargo install --locked cargo-zigbuild@0.24.0
 
 builds:
-  - builder: rust
+  # zig's linker keeps a second load command for a framework that two crates
+  # link, and dyld refuses to start a binary that names one twice. Apple's
+  # linker merges them, so the darwin targets build with plain cargo.
+  - id: darwin
+    builder: rust
+    command: build
     binary: mdlive
     flags:
       - --release
@@ -18,6 +23,19 @@ builds:
     targets:
       - x86_64-apple-darwin
       - aarch64-apple-darwin
+    hooks:
+      post:
+        # A binary that dyld refuses aborts before main, so only running it
+        # shows the fault. A loaded binary exits 1 on a missing file.
+        - sh -c '"$0" /nonexistent >/dev/null 2>&1; test $? -eq 1' "{{ .Path }}"
+
+  - id: linux
+    builder: rust
+    binary: mdlive
+    flags:
+      - --release
+      - --locked
+    targets:
       # musl links every Linux binary statically, so one archive runs on any
       # distribution, whatever its glibc.
       - x86_64-unknown-linux-musl
