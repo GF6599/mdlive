@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 description = "A terminal preview of a Markdown file that follows each save"
+repository = "https://github.com/GF6599/mdlive"
+homepage = "https://github.com/GF6599/mdlive"
+# Released as archives and a Homebrew cask, not on crates.io.
+publish = false
 
 [dependencies]
 base64 = "0.23"
