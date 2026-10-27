@@ -51,10 +51,12 @@ const MIN_HEADINGS_TO_OPEN_CONTENTS: usize = 3;
 /// How far one turn of the wheel moves, as most readers move a page.
 const WHEEL_LINES: usize = 3;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Flow {
     Continue,
     Quit,
+    /// Open the editor on the file, at the source line, counted from 1.
+    Edit(PathBuf, usize),
 }
 
 #[derive(Debug)]
@@ -503,6 +505,13 @@ impl Viewer {
             Command::NextLink(times) => (0..times).for_each(|_| self.step_link(true)),
             Command::PreviousLink(times) => (0..times).for_each(|_| self.step_link(false)),
             Command::FollowLink => self.follow_marked_link(),
+            Command::Edit => {
+                let Some(path) = self.path.clone() else {
+                    self.show_error("no file to edit");
+                    return Flow::Continue;
+                };
+                return Flow::Edit(path, self.document.source_line_at(self.top) + 1);
+            }
             Command::ToggleTree => self.enter_tree(),
             Command::OpenEntry | Command::CloseFolder | Command::FilterTree => {}
             Command::ToggleHelp => self.help_top = Some(0),

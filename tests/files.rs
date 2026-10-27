@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use mdlive::{Viewer, theme};
+use mdlive::{Flow, Viewer, theme};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -143,4 +143,34 @@ fn opens_another_file_and_goes_back_and_forward() {
     key(&mut viewer, KeyCode::Char('o'), KeyModifiers::CONTROL);
     // Then: the way back still leads to it
     assert!(status(&mut viewer).starts_with(" alpha.md"));
+}
+
+/// E asks to open the editor on the file at the source line at the top of the page, and a viewer
+/// with no file says there is nothing to edit.
+///
+/// Why it matters: the reader presses E to fix what they are reading, so an editor that opens at
+/// another line, or on another file, makes them hunt for the place.
+#[test]
+fn asks_to_edit_the_file_at_the_line_at_the_top() {
+    // Given: a page scrolled until its fifth line of text is at the top, which is source line 11
+    let dir = tempfile::tempdir().unwrap();
+    let alpha = page(dir.path(), "alpha.md", "Alpha");
+    let mut viewer = viewer_of(&alpha);
+    draw(&mut viewer);
+    for _ in 0..11 {
+        key(&mut viewer, KeyCode::Char('j'), KeyModifiers::NONE);
+    }
+    assert_eq!(first_row(&mut viewer), " Alpha line 5");
+
+    // When: the reader presses E
+    let flow = viewer.handle_key(KeyEvent::new(KeyCode::Char('E'), KeyModifiers::SHIFT));
+    // Then: the viewer asks for the editor on that file at that line
+    assert_eq!(flow, Flow::Edit(alpha, 11));
+
+    // When: a viewer with no file gets E
+    let mut empty = Viewer::new("notes", "");
+    let flow = empty.handle_key(KeyEvent::new(KeyCode::Char('E'), KeyModifiers::SHIFT));
+    // Then: it goes on, and says there is no file to edit
+    assert_eq!(flow, Flow::Continue);
+    assert!(status(&mut empty).contains("no file to edit"));
 }

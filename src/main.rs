@@ -1,11 +1,15 @@
-use std::path::PathBuf;
+use std::io::stdout;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
+use crossterm::cursor::{Hide, Show};
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyEvent, KeyEventKind, MouseButton,
-    MouseEvent, MouseEventKind,
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, MouseButton, MouseEventKind,
+};
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use mdlive::{Flow, LinkArea, OpenFileWatch, Viewer, folder_of, hyperlink_cells};
 use ratatui::backend::Backend;
@@ -13,14 +17,8 @@ use ratatui_image::picker::Picker;
 
 /// Long enough to fold the writes of one editor save into one reload, short enough to feel live.
 const DEBOUNCE: Duration = Duration::from_millis(100);
-
-enum Input {
-    Key(KeyEvent),
-    Mouse(MouseEvent),
-    Resize,
-    Changed(Result<(), String>),
-    Closed(std::io::Error),
-}
+/// How long a wait for a key lasts before the loop looks for a file change.
+const POLL: Duration = Duration::from_millis(50);
 
 fn main() -> ExitCode {
     let mut args = std::env::args_os().skip(1);
@@ -46,10 +44,9 @@ fn main() -> ExitCode {
         }
     };
 
-    let (sender, inputs) = mpsc::channel();
-    let changes = sender.clone();
+    let (sender, changes) = mpsc::channel();
     let mut watch = OpenFileWatch::new(DEBOUNCE, move |change| {
-        let _ = changes.send(Input::Changed(change));
+        let _ = sender.send(change);
     });
     if !target.is_dir()
         && let Err(error) = watch.follow(&target)
@@ -58,11 +55,10 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     let mut terminal = ratatui::init();
-    // The query reads the terminal's answer from stdin, so it runs before the key reader starts and
-    // before mouse capture, which would mix mouse events into the answer.
+    // The query reads the terminal's answer from stdin, so it runs before mouse capture, which
+    // would mix mouse events into the answer.
     let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
     capture_mouse();
-    std::thread::spawn(move || read_terminal(&sender));
     let viewer = Viewer::new(&title, &markdown).with_opener(open_in_system);
     let viewer = if target.is_dir() {
         viewer.with_images(&target, picker).with_tree(&target)
@@ -71,7 +67,7 @@ fn main() -> ExitCode {
             .with_images(folder_of(&target), picker)
             .with_path(&target)
     };
-    let result = run(&mut terminal, viewer, watch, &inputs);
+    let result = run(&mut terminal, viewer, watch, &changes);
     release_mouse();
     ratatui::restore();
     match result {
@@ -135,34 +131,24 @@ fn capture_mouse() {
         release_mouse();
         restore_screen(info);
     }));
-    let _ = crossterm::execute!(std::io::stdout(), EnableMouseCapture);
+    enable_mouse();
+}
+
+fn enable_mouse() {
+    let _ = crossterm::execute!(stdout(), EnableMouseCapture);
 }
 
 fn release_mouse() {
-    let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
+    let _ = crossterm::execute!(stdout(), DisableMouseCapture);
 }
 
-fn read_terminal(sender: &Sender<Input>) {
-    loop {
-        let input = match event::read() {
-            Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => Input::Key(key),
-            Ok(Event::Resize(..)) => Input::Resize,
-            Ok(Event::Mouse(mouse)) if is_used(mouse.kind) => Input::Mouse(mouse),
-            Ok(_) => continue,
-            Err(error) => Input::Closed(error),
-        };
-        let closed = matches!(input, Input::Closed(_));
-        if sender.send(input).is_err() || closed {
-            return;
-        }
-    }
-}
-
+/// Draws the viewer, then waits for a key, a click or a file change, on this one thread. No other
+/// thread reads the terminal, so while the editor runs, every key goes to the editor.
 fn run(
     terminal: &mut ratatui::DefaultTerminal,
     mut viewer: Viewer,
     mut watch: OpenFileWatch,
-    inputs: &Receiver<Input>,
+    changes: &Receiver<Result<(), String>>,
 ) -> std::io::Result<()> {
     let mut links: Vec<LinkArea> = Vec::new();
     loop {
@@ -174,33 +160,79 @@ fn run(
             Backend::flush(backend)?;
         }
         links = viewer.links().to_vec();
-        let Ok(input) = inputs.recv() else {
-            return Ok(());
-        };
-        match input {
-            Input::Key(key) => {
-                if viewer.handle_key(key) == Flow::Quit {
-                    return Ok(());
-                }
-                follow_open_file(&mut viewer, &mut watch);
-            }
-            Input::Mouse(mouse) => {
-                if viewer.handle_mouse(mouse) == Flow::Quit {
-                    return Ok(());
-                }
-                follow_open_file(&mut viewer, &mut watch);
-            }
-            Input::Resize => {}
-            Input::Changed(Ok(())) => {
-                if let Some(path) = viewer.path() {
-                    match std::fs::read_to_string(path) {
-                        Ok(markdown) => viewer.reload(&markdown),
-                        Err(error) => viewer.show_error(&format!("cannot read the file: {error}")),
+        let flow = loop {
+            if event::poll(POLL)? {
+                match event::read()? {
+                    Event::Key(key) if key.kind == KeyEventKind::Press => {
+                        break viewer.handle_key(key);
                     }
+                    Event::Mouse(mouse) if is_used(mouse.kind) => break viewer.handle_mouse(mouse),
+                    Event::Resize(..) => break Flow::Continue,
+                    _ => {}
                 }
             }
-            Input::Changed(Err(error)) => viewer.show_error(&format!("watch failed: {error}")),
-            Input::Closed(error) => return Err(error),
+            if let Ok(change) = changes.try_recv() {
+                reload(&mut viewer, change);
+                break Flow::Continue;
+            }
+        };
+        match flow {
+            Flow::Quit => return Ok(()),
+            Flow::Edit(path, line) => {
+                edit(terminal, &mut viewer, &path, line)?;
+                links.clear();
+            }
+            Flow::Continue => {}
         }
+        follow_open_file(&mut viewer, &mut watch);
     }
+}
+
+fn reload(viewer: &mut Viewer, change: Result<(), String>) {
+    let Some(path) = viewer.path() else {
+        return;
+    };
+    match change.and_then(|()| std::fs::read_to_string(path).map_err(|error| error.to_string())) {
+        Ok(markdown) => viewer.reload(&markdown),
+        Err(error) => viewer.show_error(&format!("cannot read the file: {error}")),
+    }
+}
+
+/// Hands the terminal to the editor in `$VISUAL` or `$EDITOR` on `path` at `line`, the way git
+/// starts one: the setting may carry its own arguments, and the file goes as an argument the shell
+/// does not parse. A save reloads the page through the watch.
+fn edit(
+    terminal: &mut ratatui::DefaultTerminal,
+    viewer: &mut Viewer,
+    path: &Path,
+    line: usize,
+) -> std::io::Result<()> {
+    let Some(editor) = ["VISUAL", "EDITOR"].iter().find_map(|name| {
+        std::env::var(name)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+    }) else {
+        viewer.show_error("set $EDITOR to edit the file");
+        return Ok(());
+    };
+    release_mouse();
+    disable_raw_mode()?;
+    crossterm::execute!(stdout(), LeaveAlternateScreen, Show)?;
+    let status = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("{editor} \"$@\""))
+        .arg("mdlive")
+        .arg(format!("+{line}"))
+        .arg(path)
+        .status();
+    enable_raw_mode()?;
+    crossterm::execute!(stdout(), EnterAlternateScreen, Hide)?;
+    enable_mouse();
+    terminal.clear()?;
+    match status {
+        Ok(status) if status.success() => {}
+        Ok(status) => viewer.show_error(&format!("the editor exited with {status}")),
+        Err(error) => viewer.show_error(&format!("cannot start the editor: {error}")),
+    }
+    Ok(())
 }

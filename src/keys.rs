@@ -48,6 +48,7 @@ pub enum Command {
     NextLink(usize),
     PreviousLink(usize),
     FollowLink,
+    Edit,
     /// Escape with no keys typed toward a command, which leaves whatever has the keys.
     Cancel,
 }
@@ -147,6 +148,7 @@ pub enum Action {
     NextLink,
     PreviousLink,
     FollowLink,
+    Edit,
 }
 
 impl Action {
@@ -184,6 +186,7 @@ impl Action {
             Self::NextLink => "mark the next link",
             Self::PreviousLink => "mark the previous link",
             Self::FollowLink => "follow the marked link",
+            Self::Edit => "edit the file at this line",
         }
     }
 
@@ -199,7 +202,8 @@ impl Action {
             | Self::ToggleTree
             | Self::OpenEntry
             | Self::CloseFolder
-            | Self::FilterTree => Group::Files,
+            | Self::FilterTree
+            | Self::Edit => Group::Files,
             Self::NextLink | Self::PreviousLink | Self::FollowLink => Group::Links,
             Self::Quit | Self::ToggleHelp => Group::Other,
             _ => Group::Move,
@@ -246,6 +250,7 @@ impl Action {
             Self::NextLink => Command::NextLink(times),
             Self::PreviousLink => Command::PreviousLink(times),
             Self::FollowLink => Command::FollowLink,
+            Self::Edit => Command::Edit,
         }
     }
 }
@@ -372,6 +377,7 @@ const BINDINGS: &[Binding] = &[
     bind(&[Key::control('i')], Action::Forward),
     bind(&[Key::named(KeyCode::Tab)], Action::Forward),
     bind(&[Key::plain('-')], Action::ToggleTree),
+    page(&[Key::plain('E')], Action::Edit),
     tree(&[Key::plain('l')], Action::OpenEntry),
     tree(&[Key::named(KeyCode::Enter)], Action::OpenEntry),
     tree(&[Key::named(KeyCode::Right)], Action::OpenEntry),
