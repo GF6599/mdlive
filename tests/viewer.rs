@@ -1186,6 +1186,43 @@ fn centres_display_math_on_its_own_lines() {
     );
 }
 
+/// A matrix or cases block in display math spans several rows, with its columns aligned, brackets
+/// the height of its rows, and the text around it on its middle row. Too wide for the screen, it
+/// stays on one line.
+///
+/// Why it matters: on one line the rows of a matrix run together with `;` between them, so a
+/// Jacobian or a piecewise function cannot be read as the grid it is.
+#[test]
+fn draws_matrices_and_cases_in_display_math_as_aligned_rows() {
+    // Given: a column vector and a piecewise function, each as display math
+    let markdown = "$$\\nabla f = \\begin{bmatrix} a \\\\ 100 \\\\ c \\end{bmatrix}$$\n\n\
+                    $$f(x) = \\begin{cases} 100 & x > 0 \\\\ 0 & x = 0 \\\\ 2 & x < 0 \\end{cases}$$\n";
+
+    // When: they are drawn with 28 columns for text
+    let screen = shown(markdown, 30, 9);
+
+    // Then: each is centred as one block, with the text beside the middle row of the brackets,
+    // matrix cells centred in their column and cases cells from its left
+    assert_eq!(
+        screen,
+        [
+            "              ⎡  a  ⎤",
+            "         ∇f = ⎢ 100 ⎥",
+            "              ⎣  c  ⎦",
+            "",
+            "            ⎧ 100  x > 0",
+            "     f(x) = ⎨ 0    x = 0",
+            "            ⎩ 2    x < 0",
+        ]
+    );
+
+    // When: the screen leaves fewer columns than the vector needs
+    let narrow = shown(markdown, 10, 12);
+    // Then: it stays on one line, wrapped as before
+    assert!(narrow.iter().all(|row| !row.contains('⎡')), "{narrow:?}");
+    assert!(narrow.iter().any(|row| row.contains(';')), "{narrow:?}");
+}
+
 /// A command the converter does not know stays as source, and dollar amounts stay as text.
 ///
 /// Why it matters: a formula that loses an unknown command shows a wrong equation without a sign,

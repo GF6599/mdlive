@@ -13,7 +13,7 @@ use crate::diagrams::{self, Diagrams};
 use crate::folds::{DetailsTag, Folds, details_tags};
 use crate::front_matter;
 use crate::highlight::highlight;
-use crate::math::to_unicode;
+use crate::math::{display_rows, to_unicode};
 use crate::pictures::{Pictures, Placed};
 use crate::table::{self, Cell};
 use crate::theme;
@@ -836,15 +836,23 @@ impl<'a> Builder<'a> {
         self.blank_before_block();
         let width = self.content_width();
         let line = self.source_line(offset);
-        let text = to_unicode(latex);
-        let mut first = true;
-        for row in text.lines() {
-            for part in wrap(&[Span::styled(row.to_string(), theme::math())], width) {
+        let rows = display_rows(latex, width);
+        if let [row] = rows.as_slice() {
+            for (index, part) in wrap(&[Span::styled(row.clone(), theme::math())], width)
+                .into_iter()
+                .enumerate()
+            {
                 let used: usize = part.iter().map(|span| span.content.width()).sum();
                 let mut centred = vec![Span::raw(" ".repeat(width.saturating_sub(used) / 2))];
                 centred.extend(part);
-                self.push_line(centred, first, line);
-                first = false;
+                self.push_line(centred, index == 0, line);
+            }
+        } else {
+            let used = rows.iter().map(|row| row.width()).max().unwrap_or(0);
+            let indent = " ".repeat(width.saturating_sub(used) / 2);
+            for (index, row) in rows.into_iter().enumerate() {
+                let spans = vec![Span::raw(indent.clone()), Span::styled(row, theme::math())];
+                self.push_line(spans, index == 0, line);
             }
         }
         self.gap = true;
