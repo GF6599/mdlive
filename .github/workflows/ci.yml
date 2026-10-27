@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  # Release calls this so a tag is held to the checks a pull request runs, and
+  # the two definitions of a passing build cannot drift apart.
+  workflow_call:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  check:
+    strategy:
+      # A failure on one system says nothing about the other, so both run to the end.
+      fail-fast: false
+      matrix:
+        # The Homebrew cask ships the macOS build and the archives ship Linux,
+        # so the gate runs on both.
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      # A tag moves, so every action is pinned by commit. Dependabot raises the
+      # trailing version comments as pull requests.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The gate never pushes or fetches, so the token stays out of .git/config.
+          persist-credentials: false
+      # Pinned by commit, the action no longer reads the toolchain from its own
+      # ref, so `with` has to name it.
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          just-version: 1.59.0
+      # rust-cache keeps ~/.cargo/bin, so this compiles cargo-deny only on a cache miss.
+      - run: just tools
+      - run: just check
