@@ -13,6 +13,7 @@ mod search;
 mod table;
 pub mod theme;
 mod watch;
+mod which_key;
 mod wrap;
 
 use std::path::Path;
@@ -34,6 +35,7 @@ use crate::keys::{Command, KeyReader};
 use crate::pictures::Pictures;
 use crate::search::{Match, find_all};
 pub use crate::watch::{FileWatch, watch_file};
+use crate::which_key::Popup;
 
 /// Beyond this width a line of prose gets too long to read, so wider screens centre the text.
 const MAX_TEXT_WIDTH: u16 = 100;
@@ -154,11 +156,16 @@ impl Viewer {
             .collect();
         frame.render_widget(Paragraph::new(lines), text);
         self.mark_matches(frame, text);
-        self.links = self.links_on_screen(text, panel);
-        self.draw_pictures(frame, text, panel);
+        let popup = Popup::of(&self.keys).map(|popup| (popup.area(body), popup));
+        let covered = popup.as_ref().map(|(area, _)| *area);
+        self.links = self.links_on_screen(text, panel, covered);
+        self.draw_pictures(frame, text, panel, covered);
         if let Some(panel) = panel {
             let current = self.document.heading_at(self.top);
             contents::draw(frame, panel, self.document.headings(), current);
+        }
+        if let Some((area, popup)) = &popup {
+            popup.draw(frame, *area);
         }
 
         hint_bar::draw(frame, bar, &hint_bar::hints_for(&self.mode()));
@@ -185,8 +192,15 @@ impl Viewer {
     }
 
     /// Draws the pictures in view, each from its first row, which may be above the page. A picture
-    /// under the contents panel is left out, because a graphics protocol draws over the panel.
-    fn draw_pictures(&mut self, frame: &mut Frame, text: Rect, panel: Option<Rect>) {
+    /// under the contents panel or the `covered` key popup is left out, because a graphics
+    /// protocol draws over them.
+    fn draw_pictures(
+        &mut self,
+        frame: &mut Frame,
+        text: Rect,
+        panel: Option<Rect>,
+        covered: Option<Rect>,
+    ) {
         let bottom = self.top + usize::from(text.height);
         for picture in self.document.pictures() {
             let end = picture.line + usize::from(picture.placed.rows);
@@ -204,6 +218,18 @@ impl Viewer {
                 continue;
             };
             let y = if picture.line < self.top { -y } else { y };
+            let shown = Rect {
+                x: text.x.saturating_add(column),
+                y: text.y.saturating_add(
+                    u16::try_from(picture.line.saturating_sub(self.top)).unwrap_or(u16::MAX),
+                ),
+                width: picture.placed.columns,
+                height: u16::try_from(end.min(bottom) - picture.line.max(self.top))
+                    .unwrap_or(u16::MAX),
+            };
+            if covered.is_some_and(|covered| covered.intersects(shown)) {
+                continue;
+            }
             self.pictures
                 .draw(frame, &picture.placed, text, SignedPosition { x, y });
         }
@@ -214,8 +240,14 @@ impl Viewer {
         &self.links
     }
 
-    /// The links in view, cut where the contents panel covers the page.
-    fn links_on_screen(&self, text: Rect, panel: Option<Rect>) -> Vec<LinkArea> {
+    /// The links in view, cut where the contents panel covers the page, and without the ones the
+    /// `covered` key popup overlaps.
+    fn links_on_screen(
+        &self,
+        text: Rect,
+        panel: Option<Rect>,
+        covered: Option<Rect>,
+    ) -> Vec<LinkArea> {
         let rows = self.top..self.top + usize::from(text.height);
         self.document
             .links()
@@ -239,6 +271,7 @@ impl Viewer {
                     url: self.document.url(link).to_string(),
                 })
             })
+            .filter(|link| !covered.is_some_and(|covered| covered.intersects(link.area)))
             .collect()
     }
 

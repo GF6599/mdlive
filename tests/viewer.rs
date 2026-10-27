@@ -784,6 +784,88 @@ fn shows_the_keys_for_what_the_reader_is_doing_in_a_bar() {
     );
 }
 
+/// After a prefix key, a popup lists each key that can come next, and it closes when the command
+/// completes or on Escape. A letter that starts a two-letter contents hint opens no popup.
+///
+/// Why it matters: a reader who types g or z has to know what can follow, and a popup that stays
+/// open, or opens for a hint letter that the contents already explains, covers the page for nothing.
+#[test]
+fn lists_the_next_keys_after_a_prefix_key() {
+    // Given: 25 sections, enough for two-letter contents hints
+    let sections: String = (1..=25)
+        .map(|n| format!("## Section {n}\n\ntext\n\n"))
+        .collect();
+    let mut viewer = Viewer::new("doc.md", &sections);
+    let screen = |viewer: &mut Viewer| rows(&draw(viewer, 80, 14)).join("\n");
+    draw(&mut viewer, 80, 14);
+
+    // When: the reader presses z
+    type_keys(&mut viewer, "z");
+    // Then: a popup titled z lists the fold keys
+    let shown = screen(&mut viewer);
+    assert!(shown.contains("┌ z "), "{shown}");
+    for entry in [
+        "a  open or close fold",
+        "R  open all folds",
+        "M  close all folds",
+    ] {
+        assert!(shown.contains(entry), "{entry} missing from\n{shown}");
+    }
+
+    // When: the reader presses Escape
+    press(&mut viewer, KeyCode::Esc);
+    // Then: the popup closes
+    assert!(!screen(&mut viewer).contains("open all folds"));
+
+    // When: the reader types 3g
+    type_keys(&mut viewer, "3g");
+    // Then: the popup title shows the count, and the popup lists gg
+    let shown = screen(&mut viewer);
+    assert!(shown.contains("┌ 3g "), "{shown}");
+    assert!(shown.contains("g  go to top or line N"), "{shown}");
+
+    // When: the reader completes gg
+    type_keys(&mut viewer, "g");
+    // Then: the popup closes
+    assert!(!screen(&mut viewer).contains("go to top"));
+
+    // When: the reader opens the contents and presses a, the start of a two-letter hint
+    type_keys(&mut viewer, "ta");
+    // Then: no popup opens, and the status line shows a as pending
+    let buffer = draw(&mut viewer, 80, 14);
+    assert!(!rows(&buffer).iter().any(|row| row.contains("┌ a ")));
+    assert!(status(&buffer).contains(" a  "));
+}
+
+/// While the key popup is open, a link under it does not open on a click.
+///
+/// Why it matters: the terminal opens a link from any cell of its text, so popup text drawn over a
+/// link would open that link when the reader clicks the popup.
+#[test]
+fn leaves_out_the_links_under_the_key_popup() {
+    // Given: a page that is one long link
+    let markdown = format!("[{}](https://example.com)\n", "linked words ".repeat(80));
+    let mut viewer = Viewer::new("doc.md", &markdown);
+    let covers = |viewer: &Viewer, (x, y): (u16, u16)| {
+        viewer
+            .links()
+            .iter()
+            .any(|link| link.area.y == y && (link.area.x..link.area.right()).contains(&x))
+    };
+
+    // When: the reader presses z
+    type_keys(&mut viewer, "z");
+    let cell = find(&draw(&mut viewer, 80, 14), "open all folds");
+    // Then: no link covers the popup text
+    assert!(!covers(&viewer, cell));
+
+    // When: the reader presses Escape
+    press(&mut viewer, KeyCode::Esc);
+    draw(&mut viewer, 80, 14);
+    // Then: the link covers that cell again
+    assert!(covers(&viewer, cell));
+}
+
 /// Thirty one-line paragraphs, with "needle" in paragraphs 3, 15 and 25.
 fn haystack() -> Viewer {
     let markdown: String = (1..=30)

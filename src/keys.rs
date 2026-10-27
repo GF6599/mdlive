@@ -65,6 +65,33 @@ pub enum Action {
 }
 
 impl Action {
+    /// What the action does, in the words a key list shows.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Quit => "quit",
+            Self::Down => "scroll down",
+            Self::Up => "scroll up",
+            Self::HalfPageDown => "half page down",
+            Self::HalfPageUp => "half page up",
+            Self::PageDown => "page down",
+            Self::PageUp => "page up",
+            Self::Top => "go to top or line N",
+            Self::End => "go to end or line N",
+            Self::ToggleContents => "open or close contents",
+            Self::NextHeading => "next section",
+            Self::PreviousHeading => "previous section",
+            Self::NextBlock => "next paragraph",
+            Self::PreviousBlock => "previous paragraph",
+            Self::SearchForward => "search forward",
+            Self::SearchBackward => "search backward",
+            Self::NextMatch => "next match",
+            Self::PreviousMatch => "previous match",
+            Self::ToggleFold => "open or close fold",
+            Self::OpenAllFolds => "open all folds",
+            Self::CloseAllFolds => "close all folds",
+        }
+    }
+
     fn command(self, count: Option<usize>) -> Command {
         let times = count.unwrap_or(1);
         match self {
@@ -204,6 +231,17 @@ fn starts_a_sequence(key: Key) -> bool {
         .any(|binding| binding.keys.len() > 1 && binding.keys[0] == key)
 }
 
+/// The keys that can follow `prefix`, each with what it does, in the order of the table.
+pub fn next_keys(prefix: Key) -> Vec<(Key, Action)> {
+    BINDINGS
+        .iter()
+        .filter_map(|binding| match binding.keys {
+            [first, second] if *first == prefix => Some((*second, binding.action)),
+            _ => None,
+        })
+        .collect()
+}
+
 /// The keys of the first binding of `action`, as a hint shows them, such as `gg` or `C-d`.
 pub fn keys_of(action: Action) -> String {
     BINDINGS
@@ -298,6 +336,11 @@ impl KeyReader {
             self.prefix = Some(key);
         }
         None
+    }
+
+    /// The first key of a sequence that is not whole yet.
+    pub fn prefix(&self) -> Option<Key> {
+        self.prefix
     }
 
     /// The keys typed toward a command that is not whole yet, as vim's showcmd shows them.

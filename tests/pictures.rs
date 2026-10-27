@@ -180,6 +180,36 @@ fn leaves_out_a_picture_under_the_contents_panel() {
     }
 }
 
+/// A picture under the key popup is not drawn while the popup is open.
+///
+/// Why it matters: a graphics protocol draws the picture over the text cells, so it would cover the
+/// keys the popup lists.
+#[test]
+fn leaves_out_a_picture_under_the_key_popup() {
+    // Given: a wide picture on the page
+    let dir = tempfile::tempdir().unwrap();
+    picture(&dir.path().join("wide.png"), 500, 40, 40, RED, RED);
+    let mut viewer = viewer(dir.path(), "# Title\n\n![wide](wide.png)\n");
+    let red_rows = |viewer: &mut Viewer| {
+        let buffer = draw(viewer, 60, 9);
+        (0..9)
+            .filter(|&y| !painted(&buffer, y, RED).is_empty())
+            .count()
+    };
+    // Then: the picture shows
+    assert!(red_rows(&mut viewer) > 0);
+
+    // When: the reader presses z, and the popup opens over the picture
+    viewer.handle_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
+    // Then: no part of the picture shows
+    assert_eq!(red_rows(&mut viewer), 0);
+
+    // When: the reader presses Escape
+    viewer.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    // Then: the picture shows again
+    assert!(red_rows(&mut viewer) > 0);
+}
+
 /// A site-root path finds the picture in the site's public folder or at the repository root, and
 /// an SVG is drawn at its size.
 ///
