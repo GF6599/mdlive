@@ -4,6 +4,7 @@ mod document;
 mod folds;
 mod front_matter;
 mod highlight;
+mod hint_bar;
 mod hyperlink;
 mod keys;
 mod math;
@@ -111,8 +112,12 @@ impl Viewer {
     pub fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
         frame.buffer_mut().set_style(area, theme::page());
-        let [body, status] =
-            Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
+        let [body, bar, status] = Layout::vertical([
+            Constraint::Fill(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .areas(area);
 
         if self.contents_open.is_none() {
             self.contents_open = Some(self.contents_fit_at_start(body.width));
@@ -155,6 +160,8 @@ impl Viewer {
             let current = self.document.heading_at(self.top);
             contents::draw(frame, panel, self.document.headings(), current);
         }
+
+        hint_bar::draw(frame, bar, &hint_bar::hints_for(&self.mode()));
 
         frame.buffer_mut().set_style(status, theme::status());
         let mut left = match (&self.prompt, &self.notice) {
@@ -481,6 +488,19 @@ impl Viewer {
                 height: 1,
             };
             frame.buffer_mut().set_style(area, style);
+        }
+    }
+
+    fn mode(&self) -> hint_bar::Mode {
+        if self.prompt.is_some() {
+            return hint_bar::Mode::TypingSearch;
+        }
+        hint_bar::Mode::Reading {
+            headings_in_contents: self
+                .contents_is_open()
+                .then(|| self.document.headings().len()),
+            search_active: self.search.is_some(),
+            has_folds: !self.document.folds().is_empty(),
         }
     }
 

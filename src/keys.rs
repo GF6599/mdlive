@@ -119,7 +119,7 @@ impl Key {
         }
     }
 
-    const fn named(code: KeyCode) -> Self {
+    pub const fn named(code: KeyCode) -> Self {
         Self {
             code,
             control: false,
@@ -142,6 +142,7 @@ impl Key {
             (KeyCode::Up, _) => String::from("↑"),
             (KeyCode::PageDown, _) => String::from("PgDn"),
             (KeyCode::PageUp, _) => String::from("PgUp"),
+            (KeyCode::Enter, _) => String::from("Enter"),
             (code, _) => code.to_string(),
         }
     }
@@ -156,7 +157,7 @@ const fn bind(keys: &'static [Key], action: Action) -> Binding {
     Binding { keys, action }
 }
 
-/// Every key sequence the reader accepts.
+/// Every key sequence the reader accepts. The first binding of an action is the one a hint shows.
 const BINDINGS: &[Binding] = &[
     bind(&[Key::plain('q')], Action::Quit),
     bind(&[Key::plain('j')], Action::Down),
@@ -201,6 +202,15 @@ fn starts_a_sequence(key: Key) -> bool {
     BINDINGS
         .iter()
         .any(|binding| binding.keys.len() > 1 && binding.keys[0] == key)
+}
+
+/// The keys of the first binding of `action`, as a hint shows them, such as `gg` or `C-d`.
+pub fn keys_of(action: Action) -> String {
+    BINDINGS
+        .iter()
+        .find(|binding| binding.action == action)
+        .map(|binding| binding.keys.iter().map(|key| key.label()).collect())
+        .unwrap_or_default()
 }
 
 /// The hint of each of `count` entries. Past one letter's worth, every hint takes two letters so

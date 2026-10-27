@@ -30,10 +30,16 @@ fn rows(buffer: &Buffer) -> Vec<String> {
         .collect()
 }
 
+/// The rows of the page, above the hint bar and the status line.
 fn body(buffer: &Buffer) -> Vec<String> {
     let mut all = rows(buffer);
-    all.pop();
+    all.truncate(all.len() - 2);
     all
+}
+
+fn hint_bar(buffer: &Buffer) -> String {
+    let all = rows(buffer);
+    all[all.len() - 2].clone()
 }
 
 fn status(buffer: &Buffer) -> String {
@@ -62,7 +68,7 @@ fn control(viewer: &mut Viewer, key: char) -> Flow {
 
 /// The cells of each body row from column `from` up to `to`, untrimmed, for one side of a split.
 fn columns(buffer: &Buffer, from: u16, to: u16) -> Vec<String> {
-    (0..buffer.area.height - 1)
+    (0..buffer.area.height - 2)
         .map(|y| (from..to).map(|x| buffer[(x, y)].symbol()).collect())
         .collect()
 }
@@ -92,7 +98,7 @@ fn renders_heading_and_paragraph_without_markup() {
     let markdown = "# Title\n\nSome **bold** and *italic* text that wraps across lines.\n";
 
     // When: it is drawn 32 columns wide, which leaves 30 for text between the margins
-    let screen = shown(markdown, 32, 8);
+    let screen = shown(markdown, 32, 9);
 
     // Then: the heading sits on its rule, and the paragraph wraps at a word boundary
     assert_eq!(
@@ -118,7 +124,7 @@ fn wraps_wide_characters_by_their_display_width() {
     let markdown = "Text 🧑🏻‍🍳 chefs cook well\n\n日本語のテキストです\n";
 
     // When: it is drawn with 10 columns for text
-    let screen = shown(markdown, 12, 7);
+    let screen = shown(markdown, 12, 8);
 
     // Then: the emoji stays whole, and the unbroken run splits between characters
     assert_eq!(
@@ -143,7 +149,7 @@ fn renders_nested_and_ordered_lists() {
     let markdown = "- one\n- two is longer than the width\n  - nested\n\n1. first\n2. second\n";
 
     // When: it is drawn with 20 columns for text
-    let screen = shown(markdown, 22, 9);
+    let screen = shown(markdown, 22, 10);
 
     // Then: the markers lead, and the nested list indents under its parent's text
     assert_eq!(
@@ -170,7 +176,7 @@ fn keeps_the_quote_bar_on_wrapped_lines() {
     let markdown = "> A quote that wraps onto two lines\n";
 
     // When: it is drawn with 20 columns for text
-    let screen = shown(markdown, 22, 4);
+    let screen = shown(markdown, 22, 5);
 
     // Then: both lines carry the bar
     assert_eq!(screen, [" ▎ A quote that wraps", " ▎ onto two lines", ""]);
@@ -185,7 +191,7 @@ fn keeps_code_block_layout() {
     let markdown = "```rust\nfn main() {\n    print!(\"hi\");\n}\nlet long = 1234567890;\n```\n";
 
     // When: it is drawn with 20 columns for text, 18 inside the block's padding
-    let screen = shown(markdown, 22, 10);
+    let screen = shown(markdown, 22, 11);
 
     // Then: the lines keep their layout inside a padded block
     assert_eq!(
@@ -213,7 +219,7 @@ fn draws_a_thematic_break() {
     let markdown = "above\n\n---\n\nbelow\n";
 
     // When: it is drawn with 20 columns for text
-    let screen = shown(markdown, 22, 6);
+    let screen = shown(markdown, 22, 7);
 
     // Then: a rule sits between them
     assert_eq!(
@@ -232,7 +238,7 @@ fn styles_text_with_the_reading_palette() {
         "# Head\n\n### Sub\n\n**bold** *soft* ~~gone~~ [link](https://example.com) `code`\n";
 
     // When: it is drawn
-    let buffer = draw(&mut Viewer::new("doc.md", markdown), 60, 10);
+    let buffer = draw(&mut Viewer::new("doc.md", markdown), 60, 11);
     let cell = |text: &str| buffer[find(&buffer, text)].clone();
 
     // Then: each kind carries its own style
@@ -256,9 +262,9 @@ fn scrolls_with_the_keys_and_stops_at_the_ends() {
     // Given: a list of 20 items on a screen with 5 rows for text
     let markdown: String = (1..=20).map(|n| format!("- item {n}\n")).collect();
     let mut viewer = Viewer::new("doc.md", &markdown);
-    let first_row = |viewer: &mut Viewer| body(&draw(viewer, 30, 6))[0].clone();
+    let first_row = |viewer: &mut Viewer| body(&draw(viewer, 30, 7))[0].clone();
     assert_eq!(first_row(&mut viewer), " • item 1");
-    assert!(status(&draw(&mut viewer, 30, 6)).ends_with("25%"));
+    assert!(status(&draw(&mut viewer, 30, 7)).ends_with("25%"));
 
     // When: the reader scrolls up at the top
     press(&mut viewer, KeyCode::Char('k'));
@@ -275,7 +281,7 @@ fn scrolls_with_the_keys_and_stops_at_the_ends() {
     // When: the reader jumps to the end
     press(&mut viewer, KeyCode::Char('G'));
     // Then: the last item sits on the last row, and the status line says 100%
-    let buffer = draw(&mut viewer, 30, 6);
+    let buffer = draw(&mut viewer, 30, 7);
     assert_eq!(
         body(&buffer),
         [
@@ -308,9 +314,9 @@ fn scrolls_by_lines_and_pages_with_the_vim_control_keys() {
     let mut viewer = Viewer::new("doc.md", &markdown);
     let first_row = |viewer: &mut Viewer, key: char| {
         control(viewer, key);
-        body(&draw(viewer, 30, 11))[0].clone()
+        body(&draw(viewer, 30, 12))[0].clone()
     };
-    draw(&mut viewer, 30, 11);
+    draw(&mut viewer, 30, 12);
 
     // Then: C-d and C-u move half a page, C-f and C-b a page, C-e and C-y a line
     assert_eq!(first_row(&mut viewer, 'd'), " • item 6");
@@ -329,8 +335,8 @@ fn repeats_a_motion_by_the_count_typed_before_it() {
     // Given: a list of 40 items on a screen with 10 rows for text
     let markdown: String = (1..=40).map(|n| format!("- item {n}\n")).collect();
     let mut viewer = Viewer::new("doc.md", &markdown);
-    let first_row = |viewer: &mut Viewer| body(&draw(viewer, 30, 11))[0].clone();
-    draw(&mut viewer, 30, 11);
+    let first_row = |viewer: &mut Viewer| body(&draw(viewer, 30, 12))[0].clone();
+    draw(&mut viewer, 30, 12);
 
     // When: the reader types 5j, then 10j
     type_keys(&mut viewer, "5j");
@@ -364,8 +370,8 @@ fn goes_to_the_top_the_end_or_a_source_line() {
         .map(|n| format!("paragraph {n} wraps here\n\n"))
         .collect();
     let mut viewer = Viewer::new("doc.md", &markdown);
-    let first_row = |viewer: &mut Viewer| body(&draw(viewer, 14, 5))[0].clone();
-    draw(&mut viewer, 14, 5);
+    let first_row = |viewer: &mut Viewer| body(&draw(viewer, 14, 6))[0].clone();
+    draw(&mut viewer, 14, 6);
 
     // When: the reader types 9G
     type_keys(&mut viewer, "9G");
@@ -375,7 +381,7 @@ fn goes_to_the_top_the_end_or_a_source_line() {
     // When: the reader types G, then gg
     type_keys(&mut viewer, "G");
     assert_eq!(
-        body(&draw(&mut viewer, 14, 5)),
+        body(&draw(&mut viewer, 14, 6)),
         [" wraps here", "", " paragraph 12", " wraps here"]
     );
     type_keys(&mut viewer, "gg");
@@ -393,9 +399,9 @@ fn goes_to_the_top_the_end_or_a_source_line() {
     // And: in a list, where every item has its own source line, 7G shows item 7
     let markdown: String = (1..=40).map(|n| format!("- item {n}\n")).collect();
     let mut list = Viewer::new("doc.md", &markdown);
-    draw(&mut list, 30, 11);
+    draw(&mut list, 30, 12);
     type_keys(&mut list, "7G");
-    assert_eq!(body(&draw(&mut list, 30, 11))[0], " • item 7");
+    assert_eq!(body(&draw(&mut list, 30, 12))[0], " • item 7");
 }
 
 /// Keys typed toward a command show in the status line, and Escape clears them before it quits.
@@ -407,23 +413,23 @@ fn shows_pending_keys_and_clears_them_on_escape() {
     // Given: a list of 40 items on a screen with 10 rows for text
     let markdown: String = (1..=40).map(|n| format!("- item {n}\n")).collect();
     let mut viewer = Viewer::new("doc.md", &markdown);
-    draw(&mut viewer, 30, 11);
+    draw(&mut viewer, 30, 12);
 
     // When: the reader types 12g
     type_keys(&mut viewer, "12g");
     // Then: the status line shows the pending keys before the percentage
-    assert!(status(&draw(&mut viewer, 30, 11)).ends_with("12g  25%"));
+    assert!(status(&draw(&mut viewer, 30, 12)).ends_with("12g  25%"));
 
     // When: the reader presses Escape
     // Then: the pending keys clear and the viewer stays open
     assert_eq!(press(&mut viewer, KeyCode::Esc), Flow::Continue);
-    assert!(status(&draw(&mut viewer, 30, 11)).ends_with(" 25%"));
-    assert!(!status(&draw(&mut viewer, 30, 11)).contains("12g"));
+    assert!(status(&draw(&mut viewer, 30, 12)).ends_with(" 25%"));
+    assert!(!status(&draw(&mut viewer, 30, 12)).contains("12g"));
 
     // When: the reader types g and a key that completes nothing, then j
     type_keys(&mut viewer, "gxj");
     // Then: the unfinished g is dropped and j moves one line
-    assert_eq!(body(&draw(&mut viewer, 30, 11))[0], " • item 2");
+    assert_eq!(body(&draw(&mut viewer, 30, 12))[0], " • item 2");
 
     // When: the reader presses Escape with nothing pending
     // Then: the viewer quits
@@ -441,8 +447,8 @@ fn jumps_between_headings_with_the_section_keys() {
     let markdown =
         format!("intro\n\n## Two\n\ntwo text\n\n## Three\n\nthree text\n\n## Four\n\n{filler}");
     let mut viewer = Viewer::new("doc.md", &markdown);
-    let first_row = |viewer: &mut Viewer| body(&draw(viewer, 30, 6))[0].clone();
-    draw(&mut viewer, 30, 6);
+    let first_row = |viewer: &mut Viewer| body(&draw(viewer, 30, 7))[0].clone();
+    draw(&mut viewer, 30, 7);
 
     // When: the reader types ]], then 2]]
     type_keys(&mut viewer, "]]");
@@ -466,7 +472,7 @@ fn jumps_between_headings_with_the_section_keys() {
     // When: the reader types 9]]
     type_keys(&mut viewer, "9]]");
     // Then: with no heading left below, the page goes to the end
-    assert!(status(&draw(&mut viewer, 30, 6)).ends_with("100%"));
+    assert!(status(&draw(&mut viewer, 30, 7)).ends_with("100%"));
 }
 
 /// } and { move by the blocks that a blank line separates, so a tight list is one block.
@@ -479,8 +485,8 @@ fn jumps_between_blocks_with_the_paragraph_keys() {
     let filler: String = (1..=8).map(|n| format!("filler {n}\n\n")).collect();
     let markdown = format!("first\n\n- one\n- two\n- three\n\nsecond\n\nthird\n\n{filler}");
     let mut viewer = Viewer::new("doc.md", &markdown);
-    let first_row = |viewer: &mut Viewer| body(&draw(viewer, 30, 6))[0].clone();
-    draw(&mut viewer, 30, 6);
+    let first_row = |viewer: &mut Viewer| body(&draw(viewer, 30, 7))[0].clone();
+    draw(&mut viewer, 30, 7);
 
     // When: the reader types }, then } again
     type_keys(&mut viewer, "}");
@@ -514,11 +520,11 @@ fn shows_the_contents_beside_the_page_and_marks_the_section_in_view() {
         "# Guide\n\nintro\n\n## Install\n\ntext\n\n### Flags\n\ntext\n\n## Usage\n\n{filler}"
     );
     let mut viewer = Viewer::new("doc.md", &markdown);
-    draw(&mut viewer, 80, 12);
+    draw(&mut viewer, 80, 13);
 
     // When: the reader presses t
     type_keys(&mut viewer, "t");
-    let buffer = draw(&mut viewer, 80, 12);
+    let buffer = draw(&mut viewer, 80, 13);
     let panel = columns(&buffer, 0, 30);
 
     // Then: the panel lists the headings under its title, indented by level, marking the first
@@ -539,7 +545,7 @@ fn shows_the_contents_beside_the_page_and_marks_the_section_in_view() {
     // When: the reader jumps two sections on and scrolls one line into the section
     type_keys(&mut viewer, "2]]j");
     // Then: the marker follows to that section
-    let panel = columns(&draw(&mut viewer, 80, 12), 0, 30);
+    let panel = columns(&draw(&mut viewer, 80, 13), 0, 30);
     assert_eq!(
         panel[2..4],
         [
@@ -551,13 +557,13 @@ fn shows_the_contents_beside_the_page_and_marks_the_section_in_view() {
     // When: the file gains a paragraph above
     viewer.reload(&markdown.replace("intro\n\n", "intro\n\nadded\n\n"));
     // Then: the marker stays on the section
-    let panel = columns(&draw(&mut viewer, 80, 12), 0, 30);
+    let panel = columns(&draw(&mut viewer, 80, 13), 0, 30);
     assert_eq!(panel[3], entry(" [d]     Flags", true));
 
     // When: the reader presses t again
     type_keys(&mut viewer, "t");
     // Then: the panel closes and the page has the full width again
-    let buffer = draw(&mut viewer, 80, 12);
+    let buffer = draw(&mut viewer, 80, 13);
     assert!(!rows(&buffer).iter().any(|row| row.contains("Contents")));
     assert_eq!(find(&buffer, "Flags").0, 1);
 }
@@ -575,18 +581,18 @@ fn keeps_the_marked_entry_in_view_and_cuts_long_headings() {
         .map(|n| format!("## Section {n}\n\ntext\n\n"))
         .collect();
     let mut viewer = Viewer::new("doc.md", &format!("## {title}\n\n{sections}"));
-    draw(&mut viewer, 80, 10);
+    draw(&mut viewer, 80, 11);
     type_keys(&mut viewer, "t");
 
     // Then: the long heading is cut to the panel with an ellipsis
-    let panel = columns(&draw(&mut viewer, 80, 10), 0, 30);
+    let panel = columns(&draw(&mut viewer, 80, 11), 0, 30);
     assert_eq!(panel[1], entry(&format!(" [aa] {}…", &title[..20]), true));
 
     // When: the reader goes to the end
     type_keys(&mut viewer, "G");
     // Then: the panel scrolls to its last entries, marking Section 29, whose heading is the top
     // line, and the first entry has scrolled away
-    let panel = columns(&draw(&mut viewer, 80, 10), 0, 30);
+    let panel = columns(&draw(&mut viewer, 80, 11), 0, 30);
     assert_eq!(
         panel[6..8],
         [
@@ -599,7 +605,7 @@ fn keeps_the_marked_entry_in_view_and_cuts_long_headings() {
     // And: a page with no headings says so
     let mut plain = Viewer::new("doc.md", "just text\n");
     type_keys(&mut plain, "t");
-    let panel = columns(&draw(&mut plain, 80, 10), 0, 30);
+    let panel = columns(&draw(&mut plain, 80, 11), 0, 30);
     assert_eq!(panel[1], entry(" No headings", false));
 }
 
@@ -612,11 +618,11 @@ fn covers_the_page_on_a_narrow_screen() {
     // Given: a paragraph that wraps on a 60-column screen
     let markdown = format!("# Title\n\n{}\n", "word ".repeat(30));
     let mut viewer = Viewer::new("doc.md", &markdown);
-    let before = columns(&draw(&mut viewer, 60, 8), 30, 60);
+    let before = columns(&draw(&mut viewer, 60, 9), 30, 60);
 
     // When: the reader presses t
     type_keys(&mut viewer, "t");
-    let buffer = draw(&mut viewer, 60, 8);
+    let buffer = draw(&mut viewer, 60, 9);
 
     // Then: the panel shows on the left, and the page beside it is laid out as before
     assert!(columns(&buffer, 0, 30)[0].starts_with("┌ Contents "));
@@ -636,25 +642,25 @@ fn opens_the_contents_at_start_when_it_fits_beside_the_page() {
     // Given: three headings on a screen of 132 columns, the panel and a full-width page
     let mut viewer = Viewer::new("doc.md", three);
     // Then: the first draw shows the contents
-    assert!(has_panel(&draw(&mut viewer, 132, 8)));
+    assert!(has_panel(&draw(&mut viewer, 132, 9)));
 
     // When: the reader presses t, then the screen grows
     type_keys(&mut viewer, "t");
     // Then: the contents stays closed
-    assert!(!has_panel(&draw(&mut viewer, 160, 8)));
+    assert!(!has_panel(&draw(&mut viewer, 160, 9)));
 
     // Given: the same page on a screen one column narrower
     let mut narrow = Viewer::new("doc.md", three);
     // Then: the contents starts closed
-    assert!(!has_panel(&draw(&mut narrow, 131, 8)));
+    assert!(!has_panel(&draw(&mut narrow, 131, 9)));
     // When: the screen grows past the width
     // Then: the contents stays closed, because the choice is made at start
-    assert!(!has_panel(&draw(&mut narrow, 160, 8)));
+    assert!(!has_panel(&draw(&mut narrow, 160, 9)));
 
     // Given: two headings on the wide screen
     let mut short = Viewer::new("doc.md", "# One\n\ntext\n\n## Two\n\ntext\n");
     // Then: the contents starts closed
-    assert!(!has_panel(&draw(&mut short, 132, 8)));
+    assert!(!has_panel(&draw(&mut short, 132, 9)));
 }
 
 /// With the contents open, each entry's hint letter puts its heading at the top.
@@ -669,8 +675,8 @@ fn jumps_to_a_section_by_its_hint_letter() {
         "# Guide\n\nintro\n\n## Install\n\ntext\n\n### Flags\n\ntext\n\n## Usage\n\n{filler}"
     );
     let mut viewer = Viewer::new("doc.md", &markdown);
-    let page_top = |viewer: &mut Viewer| columns(&draw(viewer, 80, 12), 31, 80)[0].clone();
-    draw(&mut viewer, 80, 12);
+    let page_top = |viewer: &mut Viewer| columns(&draw(viewer, 80, 13), 31, 80)[0].clone();
+    draw(&mut viewer, 80, 13);
     type_keys(&mut viewer, "t");
 
     // When: the reader presses d, the hint of Flags
@@ -686,7 +692,7 @@ fn jumps_to_a_section_by_its_hint_letter() {
     // When: the reader closes the contents and presses s
     type_keys(&mut viewer, "ts");
     // Then: the letter does nothing, so the page still starts at Flags
-    let buffer = draw(&mut viewer, 80, 12);
+    let buffer = draw(&mut viewer, 80, 13);
     assert_eq!(find(&buffer, "Flags"), (1, 0));
 }
 
@@ -701,15 +707,15 @@ fn uses_two_letter_hints_past_the_single_letters() {
         .map(|n| format!("## Section {n}\n\ntext\n\n"))
         .collect();
     let mut viewer = Viewer::new("doc.md", &sections);
-    let page_top = |viewer: &mut Viewer| columns(&draw(viewer, 80, 10), 31, 80)[0].clone();
-    draw(&mut viewer, 80, 10);
+    let page_top = |viewer: &mut Viewer| columns(&draw(viewer, 80, 11), 31, 80)[0].clone();
+    draw(&mut viewer, 80, 11);
     type_keys(&mut viewer, "t");
 
     // When: the reader presses a
     type_keys(&mut viewer, "a");
     // Then: the page has not moved, and the status line shows a as pending
     assert!(page_top(&mut viewer).starts_with("Section 1 "));
-    assert!(status(&draw(&mut viewer, 80, 10)).contains(" a  "));
+    assert!(status(&draw(&mut viewer, 80, 11)).contains(" a  "));
 
     // When: the reader presses s, completing the hint as
     type_keys(&mut viewer, "s");
@@ -724,6 +730,60 @@ fn uses_two_letter_hints_past_the_single_letters() {
     assert!(page_top(&mut viewer).starts_with("Section 4 "));
 }
 
+/// The bar above the status line names the keys for what the reader is doing, and on a narrow
+/// screen it keeps only the hints that fit whole.
+///
+/// Why it matters: the bar is how a reader learns that the contents, search and folds exist, so a
+/// hint missing from its mode, or one cut in half, hides a feature again.
+#[test]
+fn shows_the_keys_for_what_the_reader_is_doing_in_a_bar() {
+    // Given: a page with headings, a needle and a details block
+    let markdown =
+        "# One\n\nneedle\n\n## Two\n\n<details>\n<summary>More</summary>\n\nHidden\n\n</details>\n";
+    let mut viewer = Viewer::new("doc.md", markdown);
+    let buffer = draw(&mut viewer, 120, 10);
+    // Then: the bar names the reading keys, the fold key because the page has a fold, and quit
+    assert_eq!(
+        hint_bar(&buffer),
+        " j/k scroll  t contents  ]]/[[ section  / search  za fold  C-d/C-u half page  q quit"
+    );
+    // And: each key stands out from its label
+    let (x, y) = find(&buffer, "j/k scroll");
+    assert_eq!(buffer[(x, y)].fg, theme::hint().fg.unwrap());
+    assert_ne!(buffer[(x + 4, y)].fg, theme::hint().fg.unwrap());
+
+    // When: the reader starts a search
+    type_keys(&mut viewer, "/");
+    // Then: the bar names the keys of the prompt
+    assert_eq!(
+        hint_bar(&draw(&mut viewer, 120, 10)),
+        " Enter search  Esc cancel"
+    );
+
+    // When: the search runs
+    type_keys(&mut viewer, "needle");
+    press(&mut viewer, KeyCode::Enter);
+    // Then: the bar adds the keys that step through the matches
+    assert!(hint_bar(&draw(&mut viewer, 120, 10)).contains("  / search  n/N match  za fold"));
+
+    // When: the reader opens the contents
+    type_keys(&mut viewer, "t");
+    // Then: the bar leads with the hint letters of the two headings, and t now closes
+    assert!(
+        hint_bar(&draw(&mut viewer, 120, 10))
+            .starts_with(" a/s go to section  t close contents  j/k scroll")
+    );
+
+    // When: the screen is 32 columns wide, with the contents closed
+    type_keys(&mut viewer, "t");
+    // Then: the bar keeps the first hints that fit whole, and drops every hint after them, even
+    // one short enough to fit
+    assert_eq!(
+        hint_bar(&draw(&mut viewer, 32, 10)),
+        " j/k scroll  t contents"
+    );
+}
+
 /// Thirty one-line paragraphs, with "needle" in paragraphs 3, 15 and 25.
 fn haystack() -> Viewer {
     let markdown: String = (1..=30)
@@ -733,7 +793,7 @@ fn haystack() -> Viewer {
         })
         .collect();
     let mut viewer = Viewer::new("doc.md", &markdown);
-    draw(&mut viewer, 30, 6);
+    draw(&mut viewer, 30, 7);
     viewer
 }
 
@@ -749,43 +809,43 @@ fn steps_through_the_matches_of_a_search() {
     // When: the reader types /nee
     type_keys(&mut viewer, "/nee");
     // Then: the status line shows the pattern being typed
-    assert!(status(&draw(&mut viewer, 30, 6)).starts_with(" /nee"));
+    assert!(status(&draw(&mut viewer, 30, 7)).starts_with(" /nee"));
 
     // When: the reader completes the pattern and presses Enter
     type_keys(&mut viewer, "dle");
     press(&mut viewer, KeyCode::Enter);
     // Then: the match already on screen is the current one, and the page does not move
-    let buffer = draw(&mut viewer, 30, 6);
+    let buffer = draw(&mut viewer, 30, 7);
     assert_eq!(body(&buffer)[4], " line 3 needle");
     assert_eq!(buffer[(8, 4)].bg, theme::ROSE);
 
     // When: the reader presses n, then n again
     type_keys(&mut viewer, "n");
     // Then: each next match comes to the top as the current one
-    let buffer = draw(&mut viewer, 30, 6);
+    let buffer = draw(&mut viewer, 30, 7);
     assert_eq!(body(&buffer)[0], " line 15 needle");
     assert_eq!(buffer[(9, 0)].bg, theme::ROSE);
     type_keys(&mut viewer, "n");
-    assert_eq!(body(&draw(&mut viewer, 30, 6))[0], " line 25 needle");
+    assert_eq!(body(&draw(&mut viewer, 30, 7))[0], " line 25 needle");
 
     // When: the reader presses n past the last match
     type_keys(&mut viewer, "n");
     // Then: the search wraps to the first match and says so, on a screen wide enough to read it
-    let buffer = draw(&mut viewer, 60, 6);
+    let buffer = draw(&mut viewer, 60, 7);
     assert_eq!(body(&buffer)[0], " line 3 needle");
     assert!(status(&buffer).contains("search hit BOTTOM, continuing at TOP"));
 
     // When: the reader presses N
     type_keys(&mut viewer, "N");
     // Then: the search goes back past the first match to the last, and says so
-    let buffer = draw(&mut viewer, 60, 6);
+    let buffer = draw(&mut viewer, 60, 7);
     assert_eq!(body(&buffer)[0], " line 25 needle");
     assert!(status(&buffer).contains("search hit TOP, continuing at BOTTOM"));
 
     // When: the reader types 2n from the last match
     type_keys(&mut viewer, "2n");
     // Then: the count steps twice, wrapping past the end to the second match
-    assert_eq!(body(&draw(&mut viewer, 30, 6))[0], " line 15 needle");
+    assert_eq!(body(&draw(&mut viewer, 30, 7))[0], " line 15 needle");
 }
 
 /// ? searches backward, a missing pattern is reported, and Escape leaves the prompt unrun.
@@ -801,13 +861,13 @@ fn searches_backward_reports_a_missing_pattern_and_cancels_on_escape() {
     type_keys(&mut viewer, "?needle");
     press(&mut viewer, KeyCode::Enter);
     // Then: with nothing above the top, the search wraps to the last match
-    assert_eq!(body(&draw(&mut viewer, 30, 6))[0], " line 25 needle");
+    assert_eq!(body(&draw(&mut viewer, 30, 7))[0], " line 25 needle");
 
     // When: the reader searches for a pattern the page does not hold
     type_keys(&mut viewer, "/absent");
     press(&mut viewer, KeyCode::Enter);
     // Then: the status line says so in the error colour, and the page stays
-    let buffer = draw(&mut viewer, 60, 6);
+    let buffer = draw(&mut viewer, 60, 7);
     assert_eq!(body(&buffer)[0], " line 25 needle");
     let (x, y) = find(&buffer, "Pattern not found: absent");
     assert_eq!(buffer[(x, y)].fg, theme::LOVE);
@@ -816,7 +876,7 @@ fn searches_backward_reports_a_missing_pattern_and_cancels_on_escape() {
     type_keys(&mut viewer, "/line 3");
     // Then: the prompt closes, the title is back, and the page stays
     assert_eq!(press(&mut viewer, KeyCode::Esc), Flow::Continue);
-    let buffer = draw(&mut viewer, 30, 6);
+    let buffer = draw(&mut viewer, 30, 7);
     assert!(status(&buffer).starts_with(" doc.md"));
     assert_eq!(body(&buffer)[0], " line 25 needle");
 }
@@ -831,13 +891,13 @@ fn searches_the_rendered_text_with_smartcase_and_marks_every_match() {
     // Given: a line with the word twice, once inside bold markup
     let markdown = "Some **Bold** text and bold again\n";
     let mut viewer = Viewer::new("doc.md", markdown);
-    draw(&mut viewer, 40, 4);
+    draw(&mut viewer, 40, 5);
 
     // When: the reader searches for the word in lowercase
     type_keys(&mut viewer, "/bold");
     press(&mut viewer, KeyCode::Enter);
     // Then: both are marked, the first as the current match
-    let buffer = draw(&mut viewer, 40, 4);
+    let buffer = draw(&mut viewer, 40, 5);
     assert_eq!(body(&buffer)[0], " Some Bold text and bold again");
     assert_eq!(buffer[(6, 0)].bg, theme::ROSE);
     assert_eq!(buffer[(20, 0)].bg, theme::GOLD);
@@ -846,14 +906,14 @@ fn searches_the_rendered_text_with_smartcase_and_marks_every_match() {
     type_keys(&mut viewer, "/Bold");
     press(&mut viewer, KeyCode::Enter);
     // Then: only the capitalised word matches
-    let buffer = draw(&mut viewer, 40, 4);
+    let buffer = draw(&mut viewer, 40, 5);
     assert_eq!(buffer[(6, 0)].bg, theme::ROSE);
     assert_eq!(buffer[(20, 0)].bg, theme::BASE);
 
     // When: the file is saved with a new first line whose word sits where the current match was
     viewer.reload(&format!("Some Bold here\n\n{markdown}"));
     // Then: the marks move with the text, and none takes the current colour from the old place
-    let buffer = draw(&mut viewer, 40, 4);
+    let buffer = draw(&mut viewer, 40, 5);
     assert_eq!(buffer[(6, 0)].bg, theme::GOLD);
     assert_eq!(buffer[(6, 2)].bg, theme::GOLD);
 }
@@ -868,7 +928,7 @@ fn renders_inline_math_as_unicode_text() {
     let markdown = "Energy $E = mc^2$ and $\\alpha_i$ here.\n";
 
     // When: it is drawn
-    let buffer = draw(&mut Viewer::new("doc.md", markdown), 40, 3);
+    let buffer = draw(&mut Viewer::new("doc.md", markdown), 40, 4);
 
     // Then: the formulas read as symbols, in the math colour, and the words stay plain
     assert_eq!(body(&buffer)[0], " Energy E = mc² and αᵢ here.");
@@ -886,7 +946,7 @@ fn centres_display_math_on_its_own_lines() {
     let markdown = "Before\n\n$$\\sqrt{\\sum_{i=1}^n x_i^2}$$\n\nMix $$x^2$$ end\n";
 
     // When: it is drawn with 28 columns for text
-    let screen = shown(markdown, 30, 10);
+    let screen = shown(markdown, 30, 11);
 
     // Then: each formula is centred in the 28 columns, with a blank line around it
     assert_eq!(
@@ -915,7 +975,7 @@ fn keeps_unknown_commands_and_leaves_dollar_amounts_alone() {
     let markdown = "Odd $\\nosuchcommand + 1$ here.\n\nIt costs $5 and $10 today.\n\nRe-reads cost $3.93 in all ($0.31 each).\n";
 
     // When: it is drawn
-    let screen = shown(markdown, 50, 7);
+    let screen = shown(markdown, 50, 8);
 
     // Then: the command shows as written, and the prices read as plain text, also where a dollar
     // sign before a digit could close a formula, which VS Code's preview does not allow either
@@ -934,7 +994,7 @@ fn keeps_dollar_ratings_in_tables_and_math_in_headings() {
     let markdown = "| Tier | Cost |\n|---|---|\n| Pilot | $$ |\n| Active | $$$$ |\n| Eq | $$y_1$$ |\n\n## Fit $$x^2$$ here\n";
 
     // When: it is drawn
-    let screen = shown(markdown, 40, 10);
+    let screen = shown(markdown, 40, 11);
 
     // Then: the table keeps every row with its ratings, and the heading stays one line
     assert_eq!(
@@ -963,7 +1023,7 @@ fn shows_front_matter_as_keys_and_values() {
     let markdown = "---\ntitle: Notes\ndescription: A long description that wraps past the width\ntags: [rust, tui]\n---\n\n# Body\n";
 
     // When: it is drawn with 38 columns for text
-    let buffer = draw(&mut Viewer::new("doc.md", markdown), 40, 10);
+    let buffer = draw(&mut Viewer::new("doc.md", markdown), 40, 11);
 
     // Then: keys and values line up in two columns, the long value wraps under itself, and the
     // page follows after a blank line
@@ -992,7 +1052,7 @@ fn joins_block_lists_and_unquotes_values_in_front_matter() {
     let markdown = "---\nauthors:\n  - Ada\n  - Linus\nsummary: \"Quoted: value\"\n---\nText\n";
 
     // When: it is drawn
-    let screen = shown(markdown, 40, 6);
+    let screen = shown(markdown, 40, 7);
 
     // Then: the list reads as one value, and the quotes are gone
     assert_eq!(
@@ -1016,7 +1076,7 @@ fn shows_front_matter_it_cannot_read_as_source() {
     let markdown = "---\nnested:\n  key: value\n---\nText\n";
 
     // When: it is drawn
-    let buffer = draw(&mut Viewer::new("doc.md", markdown), 40, 8);
+    let buffer = draw(&mut Viewer::new("doc.md", markdown), 40, 9);
 
     // Then: the block shows as written, in the muted source colour
     assert_eq!(
@@ -1035,7 +1095,7 @@ fn folds_details_blocks_and_opens_them_with_the_fold_keys() {
     // Given: a details block with inline HTML and an entity in its summary
     let markdown = "Intro\n\n<details>\n<summary>More <b>info</b> &amp; notes</summary>\n\nHidden text\n\n> quoted\n\n</details>\n\nAfter\n";
     let mut viewer = Viewer::new("doc.md", markdown);
-    let screen = |viewer: &mut Viewer| body(&draw(viewer, 40, 10));
+    let screen = |viewer: &mut Viewer| body(&draw(viewer, 40, 11));
 
     // Then: the block is closed, showing its summary as plain text behind a marker
     assert_eq!(
@@ -1082,7 +1142,7 @@ fn starts_open_folds_open_and_keeps_fold_state_across_a_reload() {
     // Given: a closed fold, one marked open, and a third with the first one's summary
     let markdown = "<details>\n<summary>First</summary>\n\none\n\n</details>\n\n<details open>\n<summary>Second</summary>\n\ntwo\n\n</details>\n\n<details>\n<summary>First</summary>\n\nthree\n\n</details>\n";
     let mut viewer = Viewer::new("doc.md", markdown);
-    let screen = |viewer: &mut Viewer| body(&draw(viewer, 40, 12));
+    let screen = |viewer: &mut Viewer| body(&draw(viewer, 40, 13));
 
     // Then: the first is closed and the second open
     assert_eq!(
@@ -1134,16 +1194,16 @@ fn keeps_the_reading_position_across_a_resize() {
     let markdown =
         "first paragraph that also wraps\n\nsecond paragraph that wraps when narrow\n\nthird\n";
     let mut viewer = Viewer::new("doc.md", markdown);
-    draw(&mut viewer, 60, 4);
+    draw(&mut viewer, 60, 5);
     press(&mut viewer, KeyCode::Char('j'));
     press(&mut viewer, KeyCode::Char('j'));
     assert_eq!(
-        body(&draw(&mut viewer, 60, 4))[0],
+        body(&draw(&mut viewer, 60, 5))[0],
         " second paragraph that wraps when narrow"
     );
 
     // When: the screen narrows so the paragraph wraps
-    let screen = body(&draw(&mut viewer, 22, 4));
+    let screen = body(&draw(&mut viewer, 22, 5));
 
     // Then: the second paragraph still starts the screen
     assert_eq!(screen, [" second paragraph", " that wraps when", " narrow"]);
@@ -1159,7 +1219,7 @@ fn shows_html_as_source_and_hides_comments() {
     let markdown = "<div align=\"center\">\n<span>More</span>\n</div>\n\nkeep <kbd>K</kbd><!-- note --> this\n\n<!--\nhidden\n-->\n\nend\n";
 
     // When: it is drawn
-    let buffer = draw(&mut Viewer::new("doc.md", markdown), 40, 9);
+    let buffer = draw(&mut Viewer::new("doc.md", markdown), 40, 10);
 
     // Then: the HTML shows in the muted colour, and neither comment appears
     assert_eq!(
@@ -1184,11 +1244,11 @@ const SECTIONS: &str = "intro\n\n## Notes\n\nfirst section\n\n## Notes\n\nline o
 /// Scrolls `SECTIONS` so that "line two", five lines under the second Notes heading, is at the top.
 fn reading_line_two() -> Viewer {
     let mut viewer = Viewer::new("doc.md", SECTIONS);
-    draw(&mut viewer, 30, 4);
+    draw(&mut viewer, 30, 5);
     for _ in 0..12 {
         press(&mut viewer, KeyCode::Char('j'));
     }
-    assert_eq!(body(&draw(&mut viewer, 30, 4))[0], " line two");
+    assert_eq!(body(&draw(&mut viewer, 30, 5))[0], " line two");
     viewer
 }
 
@@ -1207,7 +1267,7 @@ fn keeps_the_section_across_a_reload_that_adds_lines_above() {
 
     // Then: the edit shows, and the same line is still at the top, under the same heading
     assert_eq!(
-        body(&draw(&mut viewer, 30, 4)),
+        body(&draw(&mut viewer, 30, 5)),
         [" line two", "", " line three edited"]
     );
 }
@@ -1229,7 +1289,7 @@ fn keeps_the_source_line_when_the_heading_is_gone() {
 
     // Then: the edit shows, and the same line is still at the top
     assert_eq!(
-        body(&draw(&mut viewer, 30, 4)),
+        body(&draw(&mut viewer, 30, 5)),
         [" line two", "", " line three edited"]
     );
 }
@@ -1247,7 +1307,7 @@ fn shows_a_read_error_and_keeps_the_last_render() {
     viewer.show_error("doc.md: No such file or directory");
 
     // Then: the status line names the error, and the page stays as it was
-    let buffer = draw(&mut viewer, 60, 4);
+    let buffer = draw(&mut viewer, 60, 5);
     assert!(status(&buffer).contains("No such file or directory"));
     assert_eq!(body(&buffer)[0], " line two");
 
@@ -1255,7 +1315,7 @@ fn shows_a_read_error_and_keeps_the_last_render() {
     viewer.reload(SECTIONS);
 
     // Then: the error is gone
-    assert!(!status(&draw(&mut viewer, 60, 4)).contains("No such file"));
+    assert!(!status(&draw(&mut viewer, 60, 5)).contains("No such file"));
 }
 
 /// Code takes the colours of its language, and a wrapped line keeps the panel behind it.
@@ -1268,7 +1328,7 @@ fn highlights_code_by_its_language() {
     let markdown = "```rust\nfn main() { let s = \"hi\"; } // a note that runs past the edge\n```\n\n```ts\nconst count: number = 1;\n```\n";
 
     // When: it is drawn with 40 columns for text
-    let buffer = draw(&mut Viewer::new("doc.md", markdown), 42, 12);
+    let buffer = draw(&mut Viewer::new("doc.md", markdown), 42, 13);
     let cell = |text: &str| buffer[find(&buffer, text)].clone();
 
     // Then: keywords, strings and comments each take their colour
@@ -1292,7 +1352,7 @@ fn shows_code_in_an_unknown_language_as_plain_text() {
     let markdown = "```nosuchlang\nfn unknown\n```\n\n```\nfn bare\n```\n";
 
     // When: it is drawn
-    let buffer = draw(&mut Viewer::new("doc.md", markdown), 42, 10);
+    let buffer = draw(&mut Viewer::new("doc.md", markdown), 42, 11);
 
     // Then: both show in the plain text colour
     assert_eq!(buffer[find(&buffer, "fn unknown")].fg, theme::TEXT);
@@ -1310,7 +1370,7 @@ fn draws_a_table_aligned_by_its_delimiter_row() {
         "| Name | Kind | Size |\n|:-----|:----:|-----:|\n| alpha | x | 1 |\n| beta | yy | 22 |\n";
 
     // When: it is drawn with room to spare
-    let buffer = draw(&mut Viewer::new("doc.md", markdown), 42, 8);
+    let buffer = draw(&mut Viewer::new("doc.md", markdown), 42, 9);
 
     // Then: the grid fits its content, and each column takes its alignment
     assert_eq!(
@@ -1342,7 +1402,7 @@ fn wraps_the_cells_of_a_table_wider_than_the_screen() {
     let markdown = "| Key | Text |\n|-----|------|\n| a | a long text that wraps over lines |\n| b | short |\n";
 
     // When: it is drawn with 20 columns for text
-    let screen = shown(markdown, 22, 12);
+    let screen = shown(markdown, 22, 13);
 
     // Then: the wide column wraps, and rule lines separate the rows that now span several lines
     assert_eq!(
@@ -1372,7 +1432,7 @@ fn shows_task_list_boxes() {
     let markdown = "- [ ] write tests\n- [x] ship\n";
 
     // When: it is drawn
-    let screen = shown(markdown, 30, 4);
+    let screen = shown(markdown, 30, 5);
 
     // Then: each item shows its box in place of the bullet
     assert_eq!(screen[..2], [" ☐ write tests", " ☑ ship"]);
@@ -1387,7 +1447,7 @@ fn labels_and_colours_alert_blocks() {
     let markdown = "> [!WARNING]\n> Mind the gap.\n\n> plain quote\n";
 
     // When: it is drawn
-    let buffer = draw(&mut Viewer::new("doc.md", markdown), 30, 6);
+    let buffer = draw(&mut Viewer::new("doc.md", markdown), 30, 7);
 
     // Then: the alert carries its label over its text, and the plain quote has none
     assert_eq!(
@@ -1411,7 +1471,7 @@ fn numbers_footnotes_in_reading_order_and_lists_them_at_the_end() {
     let markdown = "Text[^b] and[^a].\n\n[^a]: Ay.\n[^b]: Bee.\n\nAfter.\n";
 
     // When: it is drawn with 28 columns for text
-    let screen = shown(markdown, 30, 11);
+    let screen = shown(markdown, 30, 12);
 
     // Then: the text reads on, and the notes follow a rule at the end
     assert_eq!(
@@ -1440,14 +1500,14 @@ fn keeps_the_reading_position_on_a_page_with_notes_defined_mid_page() {
     // Given: a note defined mid-page, and a reader scrolled to the last paragraph
     let markdown = "Intro[^n] text\n\n[^n]: Note.\n\nmiddle\n\nend paragraph\n";
     let mut viewer = Viewer::new("doc.md", markdown);
-    draw(&mut viewer, 60, 4);
+    draw(&mut viewer, 60, 5);
     for _ in 0..4 {
         press(&mut viewer, KeyCode::Char('j'));
     }
-    assert_eq!(body(&draw(&mut viewer, 60, 4))[0], " end paragraph");
+    assert_eq!(body(&draw(&mut viewer, 60, 5))[0], " end paragraph");
 
     // When: the screen narrows
-    let screen = body(&draw(&mut viewer, 40, 4));
+    let screen = body(&draw(&mut viewer, 40, 5));
 
     // Then: the same paragraph is still at the top
     assert_eq!(screen[0], " end paragraph");

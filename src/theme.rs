@@ -148,6 +148,10 @@ pub fn hint() -> Style {
     Style::new().fg(GOLD)
 }
 
+pub fn hint_label() -> Style {
+    Style::new().fg(MUTED)
+}
+
 pub fn search_match() -> Style {
     Style::new().fg(BASE).bg(GOLD)
 }
