@@ -16,12 +16,18 @@ pub enum Mode {
     Help,
     Tree,
     TypingFilter,
-    Reading {
-        headings_in_contents: Option<usize>,
-        search_active: bool,
-        can_go_back: bool,
-        has_folds: bool,
-    },
+    Reading(Reading),
+}
+
+/// What the page holds and what the reader has under way on it.
+#[allow(clippy::struct_excessive_bools)]
+pub struct Reading {
+    pub headings_in_contents: Option<usize>,
+    pub search_active: bool,
+    pub link_marked: bool,
+    pub has_links: bool,
+    pub can_go_back: bool,
+    pub has_folds: bool,
 }
 
 pub struct Hint {
@@ -39,44 +45,45 @@ fn pair(first: Action, second: Action, label: &'static str) -> Hint {
 
 /// The hints for `mode`, the most useful first, because a narrow bar drops them from the end.
 pub fn hints_for(mode: &Mode) -> Vec<Hint> {
-    let (headings_in_contents, search_active, can_go_back, has_folds) = match *mode {
-        Mode::TypingSearch => {
-            return vec![
-                hint(Key::named(KeyCode::Enter).label(), "search"),
-                hint(CANCEL.label(), "cancel"),
-            ];
-        }
-        Mode::Help => {
-            return vec![
-                pair(Action::Down, Action::Up, "scroll"),
-                hint(keys_of(Action::Quit), "close"),
-            ];
-        }
-        Mode::TypingFilter => {
-            return vec![
-                hint(Key::named(KeyCode::Enter).label(), "keep"),
-                hint(CANCEL.label(), "clear"),
-            ];
-        }
-        Mode::Tree => {
-            return vec![
-                pair(Action::Down, Action::Up, "move"),
-                hint(keys_of(Action::OpenEntry), "open"),
-                hint(keys_of(Action::CloseFolder), "close"),
-                hint(keys_of(Action::FilterTree), "filter"),
-                hint(CANCEL.label(), "page"),
-                hint(keys_of(Action::ToggleTree), "close tree"),
-                hint(keys_of(Action::Quit), "quit"),
-            ];
-        }
-        Mode::Reading {
-            headings_in_contents,
-            search_active,
-            can_go_back,
-            has_folds,
-        } => (headings_in_contents, search_active, can_go_back, has_folds),
-    };
+    match mode {
+        Mode::TypingSearch => vec![
+            hint(Key::named(KeyCode::Enter).label(), "search"),
+            hint(CANCEL.label(), "cancel"),
+        ],
+        Mode::Help => vec![
+            pair(Action::Down, Action::Up, "scroll"),
+            hint(keys_of(Action::Quit), "close"),
+        ],
+        Mode::TypingFilter => vec![
+            hint(Key::named(KeyCode::Enter).label(), "keep"),
+            hint(CANCEL.label(), "clear"),
+        ],
+        Mode::Tree => vec![
+            pair(Action::Down, Action::Up, "move"),
+            hint(keys_of(Action::OpenEntry), "open"),
+            hint(keys_of(Action::CloseFolder), "close"),
+            hint(keys_of(Action::FilterTree), "filter"),
+            hint(CANCEL.label(), "page"),
+            hint(keys_of(Action::ToggleTree), "close tree"),
+            hint(keys_of(Action::Quit), "quit"),
+        ],
+        Mode::Reading(reading) => reading_hints(reading),
+    }
+}
+
+fn reading_hints(reading: &Reading) -> Vec<Hint> {
+    let Reading {
+        headings_in_contents,
+        search_active,
+        link_marked,
+        has_links,
+        can_go_back,
+        has_folds,
+    } = *reading;
     let mut bar = Vec::new();
+    if link_marked {
+        bar.push(hint(keys_of(Action::FollowLink), "follow"));
+    }
     if let Some(count) = headings_in_contents.filter(|count| *count > 0) {
         let letters = hints(count.min(HINT_LETTERS_LISTED)).join("/");
         let more = if count > HINT_LETTERS_LISTED {
@@ -113,6 +120,9 @@ pub fn hints_for(mode: &Mode) -> Vec<Hint> {
         Action::PreviousHeading,
         "section",
     ));
+    if has_links {
+        bar.push(pair(Action::NextLink, Action::PreviousLink, "link"));
+    }
     bar.push(hint(keys_of(Action::SearchForward), "search"));
     if search_active {
         bar.push(pair(Action::NextMatch, Action::PreviousMatch, "match"));

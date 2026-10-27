@@ -18,6 +18,7 @@ mod watch;
 mod which_key;
 mod wrap;
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -32,6 +33,7 @@ use ratatui_image::sliced::SignedPosition;
 use crate::diagrams::Diagrams;
 use crate::document::Document;
 use crate::folds::Folds;
+use crate::hyperlink::is_openable;
 pub use crate::hyperlink::{LinkArea, hyperlink_cells};
 use crate::keys::{Command, Focus, KeyReader};
 use crate::pictures::Pictures;
@@ -97,6 +99,9 @@ pub struct Viewer {
     pictures: Pictures,
     diagrams: Diagrams,
     back: Vec<Place>,
+    /// The link index of the link that Enter follows.
+    marked_link: Option<usize>,
+    opener: Opener,
     forward: Vec<Place>,
 }
 
@@ -125,8 +130,17 @@ impl Viewer {
             pictures: Pictures::new(Path::new("."), Picker::halfblocks()),
             diagrams: Diagrams::default(),
             back: Vec::new(),
+            marked_link: None,
+            opener: Opener(None),
             forward: Vec::new(),
         }
+    }
+
+    /// Hands web and mail addresses to `open`, which starts the program that shows them.
+    #[must_use]
+    pub fn with_opener(mut self, open: impl FnMut(&str) -> Result<(), String> + 'static) -> Self {
+        self.opener = Opener(Some(Box::new(open)));
+        self
     }
 
     /// Names the file the page came from, which the reader goes back to after opening another.
@@ -208,6 +222,7 @@ impl Viewer {
         self.prompt = None;
         self.search = None;
         self.current_match = None;
+        self.marked_link = None;
         self.pictures.set_base(folder_of(path));
         self.top = 0;
         if let Some(width) = self.width {
@@ -269,6 +284,7 @@ impl Viewer {
             .collect();
         frame.render_widget(Paragraph::new(lines), text);
         self.mark_matches(frame, text);
+        self.mark_link(frame, text);
         let popup = Popup::of(&self.keys).map(|popup| (popup.area(body), popup));
         if let Some(top) = self.help_top {
             self.help_top = Some(top.min(help::last_top(body.height)));
@@ -369,8 +385,8 @@ impl Viewer {
         &self.links
     }
 
-    /// The links in view, cut where the contents panel covers the page, and without the ones the
-    /// `covered` key popup overlaps.
+    /// The links in view that a click may open, cut where the contents panel covers the page, and
+    /// without the ones the `covered` key popup overlaps.
     fn links_on_screen(
         &self,
         text: Rect,
@@ -381,7 +397,7 @@ impl Viewer {
         self.document
             .links()
             .iter()
-            .filter(|link| rows.contains(&link.line))
+            .filter(|link| rows.contains(&link.line) && is_openable(self.document.url(link)))
             .filter_map(|link| {
                 let x = text.x.checked_add(u16::try_from(link.column).ok()?)?;
                 let right = x.checked_add(u16::try_from(link.width).ok()?)?;
@@ -407,6 +423,7 @@ impl Viewer {
     /// Shows new file contents, keeping the reader under the same heading.
     pub fn reload(&mut self, markdown: &str) {
         self.error = None;
+        self.marked_link = None;
         self.markdown = markdown.to_string();
         self.render_in_place();
     }
@@ -471,7 +488,15 @@ impl Viewer {
             return self.handle_tree_command(command, half_page);
         }
         match command {
-            Command::Quit | Command::Cancel => return Flow::Quit,
+            Command::Quit => return Flow::Quit,
+            Command::Cancel => {
+                if self.marked_link.take().is_none() {
+                    return Flow::Quit;
+                }
+            }
+            Command::NextLink(times) => (0..times).for_each(|_| self.step_link(true)),
+            Command::PreviousLink(times) => (0..times).for_each(|_| self.step_link(false)),
+            Command::FollowLink => self.follow_marked_link(),
             Command::ToggleTree => self.enter_tree(),
             Command::OpenEntry | Command::CloseFolder | Command::FilterTree => {}
             Command::ToggleHelp => self.help_top = Some(0),
@@ -738,6 +763,135 @@ impl Viewer {
         Flow::Continue
     }
 
+    /// Marks the link after the marked one, or before it when not `forward`. With no marked link
+    /// on screen, it marks the first link from the top of the screen, or the last from its bottom.
+    fn step_link(&mut self, forward: bool) {
+        let links = self.document.links();
+        let bottom = self.top + self.page;
+        let on_screen = |line: usize| (self.top..bottom).contains(&line);
+        let mut stops: Vec<(usize, usize)> = Vec::new();
+        for link in links {
+            if stops.last().is_none_or(|(url, _)| *url != link.url) {
+                stops.push((link.url, link.line));
+            }
+        }
+        let marked = self.marked_link.filter(|marked| {
+            links
+                .iter()
+                .any(|link| link.url == *marked && on_screen(link.line))
+        });
+        let next = match (
+            marked.and_then(|marked| stops.iter().position(|(url, _)| *url == marked)),
+            forward,
+        ) {
+            (Some(at), true) => stops.get(at + 1).or(stops.get(at)),
+            (Some(at), false) => stops.get(at.saturating_sub(1)),
+            (None, true) => stops.iter().find(|(_, line)| *line >= self.top),
+            (None, false) => stops.iter().rev().find(|(_, line)| *line < bottom),
+        };
+        let Some(&(url, line)) = next else {
+            return;
+        };
+        self.marked_link = Some(url);
+        if line < self.top {
+            self.scroll_to(line);
+        } else if line >= bottom {
+            self.scroll_to(line + 1 - self.page);
+        }
+    }
+
+    fn follow_marked_link(&mut self) {
+        let Some(url) = self
+            .marked_link
+            .and_then(|marked| self.document.links().iter().find(|link| link.url == marked))
+            .map(|link| self.document.url(link).to_string())
+        else {
+            return;
+        };
+        if let Some(anchor) = url.strip_prefix('#') {
+            self.jump_to_anchor(anchor);
+            return;
+        }
+        if let Some(scheme) = scheme_of(&url) {
+            if !is_openable(&url) {
+                self.show_error(&format!("will not open {scheme}: links"));
+                return;
+            }
+            let result = match &mut self.opener.0 {
+                Some(open) => open(&url),
+                None => Err(String::from("no program to open it")),
+            };
+            if let Err(error) = result {
+                self.show_error(&format!("cannot open {url}: {error}"));
+            }
+            return;
+        }
+        let (target, anchor) = url.split_once('#').unwrap_or((&url, ""));
+        let folder = self.path.as_deref().map_or(Path::new("."), folder_of);
+        let path = folder.join(target);
+        let with_extension = path.with_extension("md");
+        let file = [path, with_extension]
+            .into_iter()
+            .find(|file| file.is_file());
+        let Some(file) = file else {
+            self.show_error(&format!("not found: {target}"));
+            return;
+        };
+        self.open(&file);
+        if !anchor.is_empty() && self.error.is_none() {
+            self.jump_to_anchor(anchor);
+        }
+    }
+
+    /// Puts the heading whose anchor is `anchor` at the top, and drops the mark of the link that
+    /// led there.
+    fn jump_to_anchor(&mut self, anchor: &str) {
+        let anchor = anchor.to_lowercase();
+        let line = self
+            .document
+            .headings()
+            .iter()
+            .find(|heading| heading_anchor(&heading.text) == anchor)
+            .map(|heading| heading.line);
+        match line {
+            Some(line) => {
+                self.marked_link = None;
+                self.scroll_to(line);
+            }
+            None => self.show_error(&format!("no heading #{anchor}")),
+        }
+    }
+
+    /// Colours the rows of the marked link that are on screen.
+    fn mark_link(&self, frame: &mut Frame, text: Rect) {
+        let Some(marked) = self.marked_link else {
+            return;
+        };
+        let rows = self.top..self.top + usize::from(text.height);
+        for link in self
+            .document
+            .links()
+            .iter()
+            .filter(|link| link.url == marked && rows.contains(&link.line))
+        {
+            let (Ok(column), Ok(width), Ok(row)) = (
+                u16::try_from(link.column),
+                u16::try_from(link.width),
+                u16::try_from(link.line - self.top),
+            ) else {
+                continue;
+            };
+            let area = Rect {
+                x: text.x.saturating_add(column),
+                y: text.y.saturating_add(row),
+                width,
+                height: 1,
+            }
+            .intersection(text);
+            frame.buffer_mut().set_style(area, theme::link_selected());
+        }
+    }
+
     fn mode(&self) -> hint_bar::Mode {
         if self.prompt.is_some() {
             return hint_bar::Mode::TypingSearch;
@@ -750,14 +904,16 @@ impl Viewer {
             Some(_) if self.keys.focus == Focus::Tree => return hint_bar::Mode::Tree,
             _ => {}
         }
-        hint_bar::Mode::Reading {
+        hint_bar::Mode::Reading(hint_bar::Reading {
             headings_in_contents: self
                 .contents_is_open()
                 .then(|| self.document.headings().len()),
             search_active: self.search.is_some(),
+            link_marked: self.marked_link.is_some(),
+            has_links: !self.document.links().is_empty(),
             can_go_back: !self.back.is_empty(),
             has_folds: !self.document.folds().is_empty(),
-        }
+        })
     }
 
     fn contents_is_open(&self) -> bool {
@@ -836,4 +992,42 @@ fn same_file(one: &Path, other: &Path) -> bool {
         (Ok(one), Ok(other)) => one == other,
         _ => one == other,
     }
+}
+
+type OpenUrl = Box<dyn FnMut(&str) -> Result<(), String>>;
+
+/// The program that shows a web or mail address, none in a viewer built without one.
+struct Opener(Option<OpenUrl>);
+
+impl fmt::Debug for Opener {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(if self.0.is_some() {
+            "Opener"
+        } else {
+            "no Opener"
+        })
+    }
+}
+
+/// The anchor GitHub gives a heading: lower case, spaces as hyphens, and punctuation left out.
+fn heading_anchor(text: &str) -> String {
+    text.to_lowercase()
+        .chars()
+        .filter_map(|letter| match letter {
+            ' ' | '-' => Some('-'),
+            '_' => Some('_'),
+            letter if letter.is_alphanumeric() => Some(letter),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The scheme of `url`, when it has one before any path separator, such as `https` or `file`.
+fn scheme_of(url: &str) -> Option<&str> {
+    let (scheme, _) = url.split_once(':')?;
+    (!scheme.is_empty()
+        && scheme
+            .chars()
+            .all(|letter| letter.is_ascii_alphanumeric() || "+.-".contains(letter)))
+    .then_some(scheme)
 }

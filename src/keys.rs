@@ -45,6 +45,9 @@ pub enum Command {
     OpenEntry,
     CloseFolder,
     FilterTree,
+    NextLink(usize),
+    PreviousLink(usize),
+    FollowLink,
     /// Escape with no keys typed toward a command, which leaves whatever has the keys.
     Cancel,
 }
@@ -79,6 +82,7 @@ impl Scope {
 pub enum Group {
     Move,
     Sections,
+    Links,
     Search,
     Folds,
     Files,
@@ -86,9 +90,10 @@ pub enum Group {
 }
 
 impl Group {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Move,
         Self::Sections,
+        Self::Links,
         Self::Search,
         Self::Folds,
         Self::Files,
@@ -99,6 +104,7 @@ impl Group {
         match self {
             Self::Move => "Move",
             Self::Sections => "Sections",
+            Self::Links => "Links",
             Self::Search => "Search",
             Self::Folds => "Folds",
             Self::Files => "Files",
@@ -138,6 +144,9 @@ pub enum Action {
     OpenEntry,
     CloseFolder,
     FilterTree,
+    NextLink,
+    PreviousLink,
+    FollowLink,
 }
 
 impl Action {
@@ -172,6 +181,9 @@ impl Action {
             Self::OpenEntry => "open folder or read file, in the tree",
             Self::CloseFolder => "close folder, in the tree",
             Self::FilterTree => "filter the files, in the tree",
+            Self::NextLink => "mark the next link",
+            Self::PreviousLink => "mark the previous link",
+            Self::FollowLink => "follow the marked link",
         }
     }
 
@@ -188,6 +200,7 @@ impl Action {
             | Self::OpenEntry
             | Self::CloseFolder
             | Self::FilterTree => Group::Files,
+            Self::NextLink | Self::PreviousLink | Self::FollowLink => Group::Links,
             Self::Quit | Self::ToggleHelp => Group::Other,
             _ => Group::Move,
         }
@@ -230,6 +243,9 @@ impl Action {
             Self::OpenEntry => Command::OpenEntry,
             Self::CloseFolder => Command::CloseFolder,
             Self::FilterTree => Command::FilterTree,
+            Self::NextLink => Command::NextLink(times),
+            Self::PreviousLink => Command::PreviousLink(times),
+            Self::FollowLink => Command::FollowLink,
         }
     }
 }
@@ -337,6 +353,9 @@ const BINDINGS: &[Binding] = &[
     bind(&[Key::named(KeyCode::End)], Action::End),
     page(&[Key::plain(']'), Key::plain(']')], Action::NextHeading),
     page(&[Key::plain('['), Key::plain('[')], Action::PreviousHeading),
+    page(&[Key::plain(']'), Key::plain('l')], Action::NextLink),
+    page(&[Key::plain('['), Key::plain('l')], Action::PreviousLink),
+    page(&[Key::named(KeyCode::Enter)], Action::FollowLink),
     page(&[Key::plain('}')], Action::NextBlock),
     page(&[Key::plain('{')], Action::PreviousBlock),
     page(&[Key::plain('t')], Action::ToggleContents),

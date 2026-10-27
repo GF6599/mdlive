@@ -110,6 +110,10 @@ pub fn link() -> Style {
     Style::new().fg(FOAM)
 }
 
+pub fn link_selected() -> Style {
+    Style::new().fg(BASE).bg(FOAM)
+}
+
 pub fn math() -> Style {
     Style::new().fg(IRIS)
 }

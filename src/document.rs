@@ -13,7 +13,6 @@ use crate::diagrams::{self, Diagrams};
 use crate::folds::{DetailsTag, Folds, details_tags};
 use crate::front_matter;
 use crate::highlight::highlight;
-use crate::hyperlink::is_openable;
 use crate::math::to_unicode;
 use crate::pictures::{Pictures, Placed};
 use crate::table::{self, Cell};
@@ -549,10 +548,8 @@ impl<'a> Builder<'a> {
             }
             Tag::Link { dest_url, .. } => {
                 self.styles.push(theme::link());
-                self.link = is_openable(&dest_url).then(|| {
-                    self.document.urls.push(dest_url.to_string());
-                    self.document.urls.len() - 1
-                });
+                self.document.urls.push(dest_url.to_string());
+                self.link = Some(self.document.urls.len() - 1);
             }
             _ => {}
         }

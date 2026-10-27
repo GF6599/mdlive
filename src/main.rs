@@ -57,7 +57,7 @@ fn main() -> ExitCode {
     // The query reads the terminal's answer from stdin, so it runs before the key reader starts.
     let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
     std::thread::spawn(move || read_terminal(&sender));
-    let viewer = Viewer::new(&title, &markdown);
+    let viewer = Viewer::new(&title, &markdown).with_opener(open_in_system);
     let viewer = if target.is_dir() {
         viewer.with_images(&target, picker).with_tree(&target)
     } else {
@@ -73,6 +73,28 @@ fn main() -> ExitCode {
             eprintln!("mdlive: {error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Shows a web or mail address in the program the system picks for it. The address goes as one
+/// argument with no shell, and the program's output stays off the screen mdlive draws.
+fn open_in_system(url: &str) -> Result<(), String> {
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let status = std::process::Command::new(opener)
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map_err(|error| error.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{opener} failed with {status}"))
     }
 }
 
