@@ -104,11 +104,15 @@ impl Pictures {
         self.picker.protocol_type() != ProtocolType::Halfblocks
     }
 
-    /// The cells a picture takes at its natural size, shrunk to `width` columns when it is wider.
+    /// The cells a picture takes at the size a docs site shows it, shrunk to `width` columns when
+    /// it is wider.
     fn fit(&self, source: Source, pixels_wide: u32, pixels_high: u32, width: usize) -> Placed {
         let font = self.picker.font_size();
         let (cell_wide, cell_high) = (u64::from(font.width.max(1)), u64::from(font.height.max(1)));
-        let (wide, high) = (u64::from(pixels_wide.max(1)), u64::from(pixels_high.max(1)));
+        let on_screen = |pixels: u32| {
+            (u64::from(pixels.max(1)) * cell_wide).div_ceil(PICTURE_PIXELS_PER_COLUMN)
+        };
+        let (wide, high) = (on_screen(pixels_wide), on_screen(pixels_high));
         let room = u64::try_from(width.max(1))
             .unwrap_or(u64::MAX)
             .saturating_mul(cell_wide);
@@ -201,6 +205,11 @@ impl Pictures {
 /// `static`, and the VS Code preview uses the workspace folder itself.
 const SITE_ROOTS: [&str; 3] = ["public", "static", ""];
 
+/// A browser lays out text about 8 CSS pixels to a monospace column, and a picture pixel is a CSS
+/// pixel, so this keeps a picture as wide against the text as the docs site shows it, whatever
+/// the screen density and font size.
+const PICTURE_PIXELS_PER_COLUMN: u64 = 8;
+
 /// A picture taller than this many rows is cut, because the sliced drawing positions rows with a
 /// signed 16-bit offset.
 const MAX_ROWS: u64 = 10_000;
@@ -221,7 +230,7 @@ fn load(picker: &Picker, placed: &Placed) -> Result<SlicedProtocol, String> {
             .and_then(|reader| reader.decode().map_err(|error| error.to_string()))
             .map_err(|error| format!("cannot read: {error}"))?,
     };
-    let image: DynamicImage = if image.width() > wide {
+    let image: DynamicImage = if image.width() != wide {
         image.resize(wide, high, FilterType::Triangle)
     } else {
         image

@@ -57,26 +57,29 @@ fn painted(buffer: &Buffer, y: u16, colour: Rgb<u8>) -> Vec<u16> {
         .collect()
 }
 
-/// A picture beside the page is drawn at its own size, in the rows it takes in the text.
+/// A picture beside the page is drawn at the size a docs site shows it, 8 picture pixels to a
+/// column, in the rows it takes in the text.
 ///
 /// Why it matters: the path is relative to the Markdown file, not to where the viewer started,
 /// and a picture drawn over the text after it hides that text.
 #[test]
-fn draws_a_local_picture_at_its_size_between_the_blocks() {
-    // Given: a 100 by 40 pixel picture in a folder beside the page
+fn draws_a_local_picture_at_docs_site_size_between_the_blocks() {
+    // Given: an 80 by 40 pixel picture in a folder beside the page, on 10 by 20 pixel cells
     let dir = tempfile::tempdir().unwrap();
-    picture(&dir.path().join("pics/red.png"), 100, 40, 40, RED, RED);
+    picture(&dir.path().join("pics/red.png"), 80, 40, 40, RED, RED);
     let markdown = "before\n\n![red](pics/red.png)\n\nafter\n";
 
     // When: the page is drawn
-    let buffer = draw(&mut viewer(dir.path(), markdown), 40, 8);
+    let buffer = draw(&mut viewer(dir.path(), markdown), 40, 10);
 
-    // Then: the picture takes 10 columns and 2 rows, with the text around it in place
+    // Then: the picture is 100 by 50 screen pixels, so it takes 10 columns and 3 rows, with the
+    // text around it in place
     assert_eq!(row(&buffer, 0), " before");
-    assert_eq!(painted(&buffer, 2, RED), (1..11).collect::<Vec<_>>());
-    assert_eq!(painted(&buffer, 3, RED), (1..11).collect::<Vec<_>>());
-    assert_eq!(row(&buffer, 4), "");
-    assert_eq!(row(&buffer, 5), " after");
+    for y in 2..5 {
+        assert_eq!(painted(&buffer, y, RED), (1..11).collect::<Vec<_>>());
+    }
+    assert_eq!(row(&buffer, 5), "");
+    assert_eq!(row(&buffer, 6), " after");
 }
 
 /// A picture wider than the text shrinks to the text width and keeps its shape, and a picture in
@@ -86,10 +89,10 @@ fn draws_a_local_picture_at_its_size_between_the_blocks() {
 /// bullet hides which item it belongs to.
 #[test]
 fn fits_a_wide_picture_to_the_text_and_a_list_picture_after_its_bullet() {
-    // Given: a 2000 by 400 pixel picture, and a 20 by 20 one in a list item
+    // Given: a 2000 by 400 pixel picture, and a 16 by 16 one in a list item
     let dir = tempfile::tempdir().unwrap();
     picture(&dir.path().join("wide.png"), 2000, 400, 400, BLUE, BLUE);
-    picture(&dir.path().join("dot.png"), 20, 20, 20, RED, RED);
+    picture(&dir.path().join("dot.png"), 16, 16, 16, RED, RED);
     let markdown = "![wide](wide.png)\n\n- ![dot](dot.png)\n";
 
     // When: the page is drawn 40 columns wide, which leaves 38 for the text
@@ -113,7 +116,7 @@ fn fits_a_wide_picture_to_the_text_and_a_list_picture_after_its_bullet() {
 fn shows_the_lower_part_of_a_picture_scrolled_past_the_top() {
     // Given: a picture 4 rows tall, red in the top half and blue in the bottom half
     let dir = tempfile::tempdir().unwrap();
-    picture(&dir.path().join("tall.png"), 10, 80, 40, RED, BLUE);
+    picture(&dir.path().join("tall.png"), 8, 64, 32, RED, BLUE);
     let mut viewer = viewer(dir.path(), "![tall](tall.png)\n\nafter\n\nmore\n\nend\n");
     draw(&mut viewer, 40, 6);
 
@@ -223,7 +226,7 @@ fn reads_the_pictures_of_an_opened_page_from_its_folder() {
     // Given: a first page, and a second page in a subfolder with a picture beside it
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("first.md"), "first\n").unwrap();
-    picture(&dir.path().join("sub/red.png"), 100, 40, 40, RED, RED);
+    picture(&dir.path().join("sub/red.png"), 80, 32, 32, RED, RED);
     let second = dir.path().join("sub/second.md");
     std::fs::write(&second, "![red](red.png)\n").unwrap();
     let mut viewer = viewer(dir.path(), "first\n").with_path(&dir.path().join("first.md"));
@@ -250,16 +253,16 @@ fn draws_site_root_and_svg_pictures_of_a_docs_page() {
     std::fs::create_dir(repo.path().join(".git")).unwrap();
     picture(
         &repo.path().join("public/diagrams/red.png"),
-        100,
-        20,
-        20,
+        80,
+        16,
+        16,
         RED,
         RED,
     );
-    picture(&repo.path().join("img/blue.png"), 100, 20, 20, BLUE, BLUE);
+    picture(&repo.path().join("img/blue.png"), 80, 16, 16, BLUE, BLUE);
     std::fs::write(
         repo.path().join("public/diagrams/red.svg"),
-        r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="40"><rect width="100" height="40" fill="#ff0000"/></svg>"##,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="80" height="32"><rect width="80" height="32" fill="#ff0000"/></svg>"##,
     )
     .unwrap();
     let page = repo.path().join("docs/guide");
@@ -269,7 +272,7 @@ fn draws_site_root_and_svg_pictures_of_a_docs_page() {
     // When: the page is drawn
     let buffer = draw(&mut viewer(&page, markdown), 40, 10);
 
-    // Then: each picture is drawn at its size
+    // Then: each picture is drawn at docs site size
     let columns: Vec<u16> = (1..11).collect();
     assert_eq!(painted(&buffer, 0, RED), columns);
     assert_eq!(painted(&buffer, 2, BLUE), columns);
