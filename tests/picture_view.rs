@@ -238,3 +238,44 @@ fn click(viewer: &mut Viewer, column: u16, row: u16) {
         });
     }
 }
+
+/// After the picture view closes, the page sends its pictures to the terminal again.
+///
+/// Why it matters: the Kitty protocol sends a picture once and then draws only placeholder cells.
+/// The terminal may drop that data while the view covers the page, so a page that does not send it
+/// again shows an empty placeholder where the picture was.
+#[test]
+fn sends_the_pictures_of_the_page_again_after_the_view_closes() {
+    // Given: a chart drawn through the Kitty protocol, so its data was sent on the first draw
+    let dir = tempfile::tempdir().unwrap();
+    chart(dir.path());
+    let mut viewer = kitty_viewer(dir.path());
+    assert!(sends_a_picture(&draw(&mut viewer)));
+    assert!(!sends_a_picture(&draw(&mut viewer)));
+
+    // When: the reader opens the chart on the whole page and closes it
+    press(&mut viewer, "]p");
+    enter(&mut viewer);
+    draw(&mut viewer);
+    press(&mut viewer, "q");
+    let buffer = draw(&mut viewer);
+
+    // Then: the page sends the chart again
+    assert!(sends_a_picture(&buffer));
+}
+
+#[allow(deprecated)]
+fn kitty_viewer(dir: &Path) -> Viewer {
+    let mut picker = Picker::from_fontsize((10, 20).into());
+    picker.set_protocol_type(ProtocolType::Kitty);
+    Viewer::new("doc.md", "intro\n\n![chart](chart.png)\n\nafter\n").with_images(dir, picker)
+}
+
+/// Whether the frame carries a Kitty escape that sends picture data, as opposed to one that only
+/// draws a picture the terminal already holds.
+fn sends_a_picture(buffer: &Buffer) -> bool {
+    buffer
+        .content()
+        .iter()
+        .any(|cell| cell.symbol().contains("a=T"))
+}
