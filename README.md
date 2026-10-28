@@ -39,12 +39,13 @@ The bar at the bottom names the keys for what you are doing, and `g?` lists ever
 | `-` | Open the file tree: every Markdown file of the git repository, or of the file's folder outside one |
 | `/`, `n` / `N` | Search, then the next or previous match |
 | `]l`, `Enter` | Mark the next link, then follow it. `C-o` goes back |
+| `]p`, `Enter` | Mark the next picture, then open it on the whole screen. There `+` / `-` zoom, `h` `j` `k` `l` pan, `0` fits it again and `q` closes it |
 | `za` | Open or close a fold, a `<details>` block |
 | `V`, `y` | Select whole lines, then copy their Markdown source |
 | `E` | Edit the file at the line at the top of the screen, in `$VISUAL` or `$EDITOR` |
 | `q` | Quit |
 
-The mouse works too: the wheel scrolls, a click picks a contents entry, a tree row or a link, and a drag selects lines and copies them when you let go.
+The mouse works too: the wheel scrolls, a click picks a contents entry, a tree row or a link, a click on a picture opens it on the whole screen, and a drag selects lines and copies them when you let go.
 
 ### What a page shows
 
