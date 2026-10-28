@@ -210,8 +210,9 @@ impl Pictures {
         }
     }
 
-    /// Draws the picture `view` fitted to `area`, in the middle of it.
-    pub fn draw_view(&mut self, frame: &mut Frame, view: &PictureView, area: Rect) {
+    /// Draws the part of the picture `view` that fits `area`, in the middle of it. An SVG is drawn
+    /// again at each zoom so that it stays sharp.
+    pub fn draw_view(&mut self, frame: &mut Frame, view: &mut PictureView, area: Rect) {
         let font = self.picker.font_size();
         let window = view.frame(area.width, area.height, (font.width, font.height));
         let current = self

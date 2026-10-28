@@ -875,6 +875,7 @@ fn lists_every_key_on_a_help_screen() {
         ("gg, Home", "go to top or line N"),
         ("]]", "next section"),
         ("]p", "mark the next picture"),
+        ("+, =", "zoom in, in a picture"),
         ("a, s, d, …", "go to a section, with the contents open"),
         ("/", "search forward"),
         ("za", "open or close fold"),

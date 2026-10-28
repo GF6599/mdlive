@@ -78,7 +78,22 @@ pub fn hints_for(mode: &Mode) -> Vec<Hint> {
             pair(Action::NextHeading, Action::PreviousHeading, "section"),
             pair(Action::HalfPageDown, Action::HalfPageUp, "half page"),
         ],
-        Mode::Picture => vec![hint(keys_of(Action::ClosePicture), "close")],
+        Mode::Picture => vec![
+            pair(Action::ZoomIn, Action::ZoomOut, "zoom"),
+            hint(
+                [
+                    Action::PanLeft,
+                    Action::PanDown,
+                    Action::PanUp,
+                    Action::PanRight,
+                ]
+                .map(keys_of)
+                .concat(),
+                "pan",
+            ),
+            hint(keys_of(Action::ZoomFit), "fit"),
+            hint(keys_of(Action::ClosePicture), "close"),
+        ],
         Mode::Reading(reading) => reading_hints(reading),
     }
 }

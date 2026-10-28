@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use image::{Rgb, RgbImage};
 use mdlive::Viewer;
 use ratatui::Terminal;
@@ -103,8 +103,8 @@ fn opens_the_marked_picture_fitted_to_the_page_and_closes_it() {
     assert!(is(&buffer, 37, 8, RED));
     assert!(is(&buffer, 20, 5, BLUE));
     assert_ne!(row(&buffer, 0), " intro");
-    // And: the bar names the key that closes the picture
-    assert!(row(&buffer, HINT_BAR).starts_with(" q close"));
+    // And: the bar names the keys of the picture
+    assert!(row(&buffer, HINT_BAR).starts_with(" +/- zoom"));
 
     // When: the reader presses q
     press(&mut viewer, "q");
@@ -112,4 +112,88 @@ fn opens_the_marked_picture_fitted_to_the_page_and_closes_it() {
 
     // Then: the page shows again
     assert_eq!(row(&buffer, 0), " intro");
+}
+
+/// + zooms into the middle of the picture, - zooms out, and 0 fits it to the page again.
+///
+/// Why it matters: the labels of a wide diagram stay unreadable at the fit, so the reader needs to
+/// make one part of it larger than the page.
+#[test]
+fn zooms_into_the_middle_of_the_picture_and_fits_it_again() {
+    // Given: the chart open on the page
+    let dir = tempfile::tempdir().unwrap();
+    chart(dir.path());
+    let mut viewer = viewer(dir.path());
+    draw(&mut viewer);
+    press(&mut viewer, "]p");
+    enter(&mut viewer);
+
+    // When: the reader presses - at the fit
+    press(&mut viewer, "-");
+    // Then: the chart stays fitted to the page
+    assert!(is(&draw(&mut viewer), 2, 1, RED));
+
+    // When: the reader presses + twice, which doubles the size
+    press(&mut viewer, "++");
+    let buffer = draw(&mut viewer);
+    // Then: the blue middle fills the page
+    assert!(is(&buffer, 2, 1, BLUE));
+    assert!(is(&buffer, 37, 8, BLUE));
+
+    // When: the reader presses - once
+    press(&mut viewer, "-");
+    let buffer = draw(&mut viewer);
+    // Then: the red edge shows again at the corners, and the middle stays blue
+    assert!(is(&buffer, 1, 0, RED));
+    assert!(is(&buffer, 20, 5, BLUE));
+
+    // When: the reader presses 0
+    press(&mut viewer, "0");
+    // Then: the chart fits the page again
+    assert!(is(&draw(&mut viewer), 2, 1, RED));
+}
+
+/// h, j, k, l and the wheel pan a zoomed picture, and the pan stops at the edge of the picture.
+///
+/// Why it matters: a pan past the edge would show empty page where the reader expects the rest of
+/// the picture, and they would have to pan back blind.
+#[test]
+fn pans_a_zoomed_picture_up_to_its_edges() {
+    // Given: the chart open and zoomed to twice the fit, so the blue middle fills the page
+    let dir = tempfile::tempdir().unwrap();
+    chart(dir.path());
+    let mut viewer = viewer(dir.path());
+    draw(&mut viewer);
+    press(&mut viewer, "]p");
+    enter(&mut viewer);
+    press(&mut viewer, "++");
+    draw(&mut viewer);
+
+    // When: the reader presses h far more often than the picture is wide
+    press(&mut viewer, "hhhhhhhhhhhhhhhhhhhh");
+    let buffer = draw(&mut viewer);
+    // Then: the left edge of the chart is at the left of the page, a red band and then blue
+    assert!(is(&buffer, 2, 5, RED));
+    assert!(is(&buffer, 30, 5, BLUE));
+
+    // When: the reader turns the wheel down far more often than the picture is tall
+    for _ in 0..20 {
+        viewer.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 20,
+            row: 5 + HEADER_ROWS,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+    let buffer = draw(&mut viewer);
+    // Then: the bottom edge of the chart is at the bottom of the page
+    assert!(is(&buffer, 30, 8, RED));
+    assert!(is(&buffer, 30, 1, BLUE));
+
+    // When: the reader presses l and k far more often than the picture is wide and tall
+    press(&mut viewer, "llllllllllllllllllllkkkkkkkkkkkkkkkkkkkk");
+    let buffer = draw(&mut viewer);
+    // Then: the top right corner of the chart is at the top right of the page
+    assert!(is(&buffer, 37, 1, RED));
+    assert!(is(&buffer, 10, 8, BLUE));
 }
