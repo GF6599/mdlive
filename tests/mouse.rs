@@ -104,8 +104,8 @@ fn cursor_row(buffer: &Buffer) -> Option<u16> {
     (1..HEIGHT - 3).find(|&y| Some(buffer[(1, y)].bg) == colour)
 }
 
-/// A click on a tree folder opens or closes it, a click on a file reads it, the wheel over the
-/// tree moves its cursor, and a click on the page gives the page the keys.
+/// A click on a tree folder opens or closes it, the wheel over the tree moves its cursor, a click
+/// on a file reads it and gives the page the keys, and a click on the page gives the page the keys.
 ///
 /// Why it matters: the tree is a list a reader points at, so a click that lands on another row, or
 /// a page that keeps ignoring the keys after the reader clicked into it, sends them elsewhere.
@@ -129,22 +129,19 @@ fn opens_tree_rows_by_click_and_gives_the_keys_to_what_was_clicked() {
     assert_eq!(cells(&buffer, 1, 1, 10).trim_end(), "▾ docs");
     assert_eq!(cells(&buffer, 3, 1, 12).trim(), "beta.md");
 
-    // When: the reader clicks the second file
-    click(&mut viewer, 8, 3);
-    // Then: it is read into the page
-    assert_eq!(page_row(&draw(&mut viewer), 0), "Beta");
-
     // When: the wheel turns up over the tree
     mouse(&mut viewer, MouseEventKind::ScrollUp, 8, 3);
     // Then: the cursor moves up
     assert!(cursor_row(&draw(&mut viewer)).is_some_and(|row| row < 3));
 
-    // When: the reader clicks the page
-    click(&mut viewer, 50, 4);
-    // Then: the page has the keys, and the tree stays open
+    // When: the reader clicks the second file
+    click(&mut viewer, 8, 3);
+    // Then: it is read into the page, the page has the keys, and the tree stays open
     let buffer = draw(&mut viewer);
+    assert_eq!(page_row(&buffer, 0), "Beta");
     assert!(full_row(&buffer, HEIGHT - 2).starts_with("j/k scroll"));
     assert_eq!(cursor_row(&buffer), None);
+    assert_eq!(cells(&buffer, 1, 1, 10).trim_end(), "▾ docs");
 
     // When: the reader clicks the tree again, on the folder
     click(&mut viewer, 5, 1);
@@ -152,4 +149,11 @@ fn opens_tree_rows_by_click_and_gives_the_keys_to_what_was_clicked() {
     let buffer = draw(&mut viewer);
     assert!(full_row(&buffer, HEIGHT - 2).starts_with("j/k move"));
     assert_eq!(cells(&buffer, 1, 1, 10).trim_end(), "▸ docs");
+
+    // When: the reader clicks the page
+    click(&mut viewer, 50, 4);
+    // Then: the page has the keys, and the tree stays open
+    let buffer = draw(&mut viewer);
+    assert!(full_row(&buffer, HEIGHT - 2).starts_with("j/k scroll"));
+    assert_eq!(cursor_row(&buffer), None);
 }
