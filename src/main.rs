@@ -11,11 +11,11 @@ use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, MouseButton, MouseEventKind,
 };
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode, window_size,
 };
 use mdlive::{Flow, LinkArea, OpenFileWatch, Viewer, folder_of, hyperlink_cells};
 use ratatui::backend::Backend;
-use ratatui_image::picker::Picker;
+use ratatui_image::picker::{Picker, ProtocolType};
 
 /// Long enough to fold the writes of one editor save into one reload, short enough to feel live.
 const DEBOUNCE: Duration = Duration::from_millis(100);
@@ -60,6 +60,11 @@ fn main() -> ExitCode {
     // The query reads the terminal's answer from stdin, so it runs before mouse capture, which
     // would mix mouse events into the answer.
     let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
+    let cell_size = if picker.protocol_type() == ProtocolType::Halfblocks {
+        None
+    } else {
+        cell_pixels()
+    };
     capture_mouse();
     let viewer = Viewer::new(&title, &markdown)
         .with_opener(open_in_system)
@@ -71,7 +76,7 @@ fn main() -> ExitCode {
             .with_images(folder_of(&target), picker)
             .with_path(&target)
     };
-    let result = run(&mut terminal, viewer, watch, &changes);
+    let result = run(&mut terminal, viewer, watch, &changes, cell_size);
     release_mouse();
     ratatui::restore();
     match result {
@@ -178,6 +183,32 @@ fn release_mouse() {
     let _ = crossterm::execute!(stdout(), DisableMouseCapture);
 }
 
+fn cell_pixels() -> Option<(u16, u16)> {
+    let size = window_size().ok()?;
+    (size.width > 0 && size.height > 0 && size.columns > 0 && size.rows > 0)
+        .then(|| (size.width / size.columns, size.height / size.rows))
+}
+
+/// Asks the terminal how it draws pictures again when its cells change size, as a zoom does, so
+/// pictures keep their size against the text. `cell_size` is `None` where nothing can change,
+/// because the terminal draws half blocks or reports no pixels.
+fn follow_zoom(viewer: &mut Viewer, cell_size: &mut Option<(u16, u16)>) {
+    let (Some(before), Some(now)) = (*cell_size, cell_pixels()) else {
+        return;
+    };
+    if before == now {
+        return;
+    }
+    *cell_size = Some(now);
+    // The query reads the answer from stdin, where mouse events would mix into it.
+    release_mouse();
+    let picker = Picker::from_query_stdio();
+    enable_mouse();
+    if let Ok(picker) = picker {
+        viewer.set_picker(picker);
+    }
+}
+
 /// Draws the viewer, then waits for a key, a click or a file change, on this one thread. No other
 /// thread reads the terminal, so while the editor runs, every key goes to the editor.
 fn run(
@@ -185,6 +216,7 @@ fn run(
     mut viewer: Viewer,
     mut watch: OpenFileWatch,
     changes: &Receiver<Result<(), String>>,
+    mut cell_size: Option<(u16, u16)>,
 ) -> std::io::Result<()> {
     let mut links: Vec<LinkArea> = Vec::new();
     loop {
@@ -203,7 +235,10 @@ fn run(
                         break viewer.handle_key(key);
                     }
                     Event::Mouse(mouse) if is_used(mouse.kind) => break viewer.handle_mouse(mouse),
-                    Event::Resize(..) => break Flow::Continue,
+                    Event::Resize(..) => {
+                        follow_zoom(&mut viewer, &mut cell_size);
+                        break Flow::Continue;
+                    }
                     _ => {}
                 }
             }
