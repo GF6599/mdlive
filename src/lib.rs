@@ -84,11 +84,13 @@ impl Selection {
     }
 }
 
-/// Where the left button went down on the page: its screen line, and the link under it.
+/// Where the left button went down on the page: its screen line, and the link or picture under
+/// it.
 #[derive(Debug, Clone, Copy)]
 struct Press {
     line: usize,
     link: Option<usize>,
+    picture: Option<usize>,
 }
 
 /// A page the reader left, and the source line at the top of the screen when they left it.
@@ -128,6 +130,8 @@ pub struct Viewer {
     links: Vec<LinkArea>,
     /// Every link drawn in the last frame, for a click to find the one it hit.
     link_areas: Vec<LinkArea>,
+    /// The cells of each picture drawn in the last frame, by its index in the page's pictures.
+    picture_areas: Vec<(usize, Rect)>,
     pictures: Pictures,
     diagrams: Diagrams,
     back: Vec<Place>,
@@ -170,6 +174,7 @@ impl Viewer {
             notice: None,
             links: Vec::new(),
             link_areas: Vec::new(),
+            picture_areas: Vec::new(),
             pictures: Pictures::new(Path::new("."), Picker::halfblocks()),
             diagrams: Diagrams::default(),
             back: Vec::new(),
@@ -319,6 +324,7 @@ impl Viewer {
             self.pictures.draw_view(frame, view, body);
             self.links.clear();
             self.link_areas.clear();
+            self.picture_areas.clear();
             breadcrumb::draw(frame, header, &self.title, &[]);
             hint_bar::draw(frame, bar, &hint_bar::hints_for(&hint_bar::Mode::Picture));
             self.draw_status(frame, status);
@@ -438,7 +444,8 @@ impl Viewer {
         covered: Option<Rect>,
     ) {
         let bottom = self.top + usize::from(text.height);
-        for picture in self.document.pictures() {
+        self.picture_areas.clear();
+        for (index, picture) in self.document.pictures().iter().enumerate() {
             let end = picture.line + usize::from(picture.placed.rows);
             if end <= self.top || picture.line >= bottom {
                 continue;
@@ -466,6 +473,7 @@ impl Viewer {
             if covered.is_some_and(|covered| covered.intersects(shown)) {
                 continue;
             }
+            self.picture_areas.push((index, shown.intersection(text)));
             self.pictures
                 .draw(frame, &picture.placed, text, SignedPosition { x, y });
         }
@@ -1018,6 +1026,11 @@ impl Viewer {
                         .iter()
                         .find(|link| link.area.contains(at))
                         .map(|link| link.id),
+                    picture: self
+                        .picture_areas
+                        .iter()
+                        .find(|(_, area)| area.contains(at))
+                        .map(|(index, _)| *index),
                 });
             }
             return;
@@ -1070,7 +1083,7 @@ impl Viewer {
         self.keys.focus = Focus::Visual;
     }
 
-    /// Copies what a drag selected, or follows the link a click pressed.
+    /// Copies what a drag selected, or follows the link or opens the picture a click pressed.
     fn release(&mut self) {
         let Some(press) = self.press.take() else {
             return;
@@ -1081,6 +1094,9 @@ impl Viewer {
         } else if let Some(link) = press.link {
             self.marked_link = Some(link);
             self.follow_marked_link();
+        } else if let Some(picture) = press.picture {
+            self.marked_picture = Some(picture);
+            self.open_picture(picture);
         }
     }
 

@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use image::{Rgb, RgbImage};
 use mdlive::Viewer;
 use ratatui::Terminal;
@@ -196,4 +196,45 @@ fn pans_a_zoomed_picture_up_to_its_edges() {
     // Then: the top right corner of the chart is at the top right of the page
     assert!(is(&buffer, 37, 1, RED));
     assert!(is(&buffer, 10, 8, BLUE));
+}
+
+/// A plain click on a picture in the page opens it, and a click on the text beside it does not.
+///
+/// Why it matters: a reader who sees a diagram too small to read reaches for the mouse, and a click
+/// on text must stay free for links and line selection.
+#[test]
+fn opens_a_picture_with_a_click_on_it() {
+    // Given: a page with text above a chart, which takes 5 columns and 2 rows from column 1
+    let dir = tempfile::tempdir().unwrap();
+    chart(dir.path());
+    let mut viewer = viewer(dir.path());
+    draw(&mut viewer);
+
+    // When: the reader clicks the text above the chart
+    click(&mut viewer, 3, 0);
+    // Then: the page stays
+    assert_eq!(row(&draw(&mut viewer), 0), " intro");
+
+    // When: the reader clicks the chart
+    click(&mut viewer, 3, 2);
+    let buffer = draw(&mut viewer);
+
+    // Then: the chart fills the page
+    assert!(is(&buffer, 2, 1, RED));
+    assert!(is(&buffer, 20, 5, BLUE));
+}
+
+/// A press and a release of the left button at `column` and `row`, counted below the breadcrumb.
+fn click(viewer: &mut Viewer, column: u16, row: u16) {
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        viewer.handle_mouse(MouseEvent {
+            kind,
+            column,
+            row: row + HEADER_ROWS,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
 }
