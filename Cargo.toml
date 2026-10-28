@@ -1,6 +1,6 @@
 [package]
 name = "mdlive"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "MIT"
 description = "A terminal preview of a Markdown file that follows each save"
