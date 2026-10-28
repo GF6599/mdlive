@@ -327,45 +327,66 @@ struct Binding {
     scope: Scope,
 }
 
-const fn scoped(
-    keys: &'static [Key],
-    action: Action,
-    page: bool,
-    tree: bool,
-    visual: bool,
-) -> Binding {
+const fn scoped(keys: &'static [Key], action: Action, scope: Scope) -> Binding {
     Binding {
         keys,
         action,
-        scope: Scope { page, tree, visual },
+        scope,
     }
 }
 
+const NONE: Scope = Scope {
+    page: false,
+    tree: false,
+    visual: false,
+};
+
 /// A key of the page and the tree.
 const fn bind(keys: &'static [Key], action: Action) -> Binding {
-    scoped(keys, action, true, true, false)
+    let scope = Scope {
+        page: true,
+        tree: true,
+        ..NONE
+    };
+    scoped(keys, action, scope)
 }
 
 /// A movement key, which also moves the cursor of a selection.
 const fn move_key(keys: &'static [Key], action: Action) -> Binding {
-    scoped(keys, action, true, true, true)
+    let scope = Scope {
+        page: true,
+        tree: true,
+        visual: true,
+    };
+    scoped(keys, action, scope)
 }
 
 /// A movement key of the page, which also moves the cursor of a selection.
 const fn page_move(keys: &'static [Key], action: Action) -> Binding {
-    scoped(keys, action, true, false, true)
+    let scope = Scope {
+        page: true,
+        visual: true,
+        ..NONE
+    };
+    scoped(keys, action, scope)
 }
 
 const fn page(keys: &'static [Key], action: Action) -> Binding {
-    scoped(keys, action, true, false, false)
+    let scope = Scope { page: true, ..NONE };
+    scoped(keys, action, scope)
 }
 
 const fn tree(keys: &'static [Key], action: Action) -> Binding {
-    scoped(keys, action, false, true, false)
+    let scope = Scope { tree: true, ..NONE };
+    scoped(keys, action, scope)
 }
 
 const fn visual(keys: &'static [Key], action: Action) -> Binding {
-    scoped(keys, action, false, false, true)
+    let scope = Scope {
+        visual: true,
+        ..NONE
+    };
+    scoped(keys, action, scope)
 }
 
 /// Every key sequence the reader accepts. The first binding of an action is the one a hint shows.
