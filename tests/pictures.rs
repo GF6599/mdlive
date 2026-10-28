@@ -283,9 +283,9 @@ fn draws_site_root_and_svg_pictures_of_a_docs_page() {
 /// `from_fontsize` is the only constructor that takes a cell size, because `from_query_stdio` asks
 /// a real terminal.
 #[allow(deprecated)]
-fn iterm2_picker(wide: u16, high: u16) -> Picker {
+fn picker_on_cells(protocol: ProtocolType, wide: u16, high: u16) -> Picker {
     let mut picker = Picker::from_fontsize((wide, high).into());
-    picker.set_protocol_type(ProtocolType::Iterm2);
+    picker.set_protocol_type(protocol);
     picker
 }
 
@@ -313,16 +313,42 @@ fn draws_a_picture_again_for_the_cells_of_a_zoomed_terminal() {
     // Given: an 80 by 40 pixel picture drawn through iTerm2 on 10 by 20 pixel cells
     let dir = tempfile::tempdir().unwrap();
     picture(&dir.path().join("red.png"), 80, 40, 40, RED, RED);
-    let mut viewer =
-        Viewer::new("doc.md", "![red](red.png)\n").with_images(dir.path(), iterm2_picker(10, 20));
+    let mut viewer = Viewer::new("doc.md", "![red](red.png)\n")
+        .with_images(dir.path(), picker_on_cells(ProtocolType::Iterm2, 10, 20));
     assert_eq!(iterm2_width(&draw(&mut viewer, 40, 6)), "100px");
 
     // When: the terminal zooms to 20 by 40 pixel cells
-    viewer.set_picker(iterm2_picker(20, 40));
+    viewer.set_picker(picker_on_cells(ProtocolType::Iterm2, 20, 40));
     let buffer = draw(&mut viewer, 40, 6);
 
     // Then: the picture fills its 10 columns at the new cell width
     assert_eq!(iterm2_width(&buffer), "200px");
+}
+
+/// After a zoom, a picture that the larger cells push past the pixel budget takes fewer columns.
+///
+/// Why it matters: cells twice the size hold four times the pixels, so a picture kept in its old
+/// cells after a zoom renders past the budget that bounds the memory of one picture.
+#[test]
+fn shrinks_a_picture_that_a_zoom_pushes_past_the_pixel_budget() {
+    // Given: a 304 by 4000 pixel picture across the 38 text columns, on 10 by 20 pixel cells
+    let dir = tempfile::tempdir().unwrap();
+    picture(&dir.path().join("tall.png"), 304, 4000, 4000, RED, RED);
+    let mut viewer = Viewer::new("doc.md", "![tall](tall.png)\n").with_images(
+        dir.path(),
+        picker_on_cells(ProtocolType::Halfblocks, 10, 20),
+    );
+    assert_eq!(
+        painted(&draw(&mut viewer, 40, 6), 0, RED),
+        (1..39).collect::<Vec<_>>()
+    );
+
+    // When: the terminal zooms to 20 by 40 pixel cells
+    viewer.set_picker(picker_on_cells(ProtocolType::Halfblocks, 20, 40));
+    let buffer = draw(&mut viewer, 40, 6);
+
+    // Then: the picture narrows to the columns the budget allows
+    assert_eq!(painted(&buffer, 0, RED), (1..30).collect::<Vec<_>>());
 }
 
 /// A site-root path does not look above the repository.
