@@ -315,7 +315,7 @@ impl Viewer {
         ])
         .areas(area);
 
-        if let Some(view) = &self.picture_view {
+        if let Some(view) = &mut self.picture_view {
             self.pictures.draw_view(frame, view, body);
             self.links.clear();
             self.link_areas.clear();
@@ -620,6 +620,10 @@ impl Viewer {
             | Command::FilterTree
             | Command::SelectLines
             | Command::CopySelection
+            | Command::ZoomIn(_)
+            | Command::ZoomOut(_)
+            | Command::ZoomFit
+            | Command::Pan { .. }
             | Command::ClosePicture => {}
             Command::ToggleHelp => self.help_top = Some(0),
             Command::Back => {
@@ -949,7 +953,12 @@ impl Viewer {
     /// contents entry, a tree row or a link, and gives the keys to the tree or the page it lands on.
     /// A drag over the page selects lines, and the release copies them.
     pub fn handle_mouse(&mut self, event: MouseEvent) -> Flow {
-        if self.picture_view.is_some() {
+        if let Some(view) = &mut self.picture_view {
+            match event.kind {
+                MouseEventKind::ScrollDown => view.pan(0, 1),
+                MouseEventKind::ScrollUp => view.pan(0, -1),
+                _ => {}
+            }
             return Flow::Continue;
         }
         if self.prompt.is_some() || self.tree.as_ref().is_some_and(Tree::is_typing) {
@@ -1226,8 +1235,16 @@ impl Viewer {
     }
 
     fn handle_picture_command(&mut self, command: Command) -> Flow {
+        let Some(view) = self.picture_view.as_mut() else {
+            self.keys.focus = Focus::Page;
+            return Flow::Continue;
+        };
         match command {
             Command::Quit => return Flow::Quit,
+            Command::ZoomIn(times) => view.zoom_in(times),
+            Command::ZoomOut(times) => view.zoom_out(times),
+            Command::ZoomFit => view.fit(),
+            Command::Pan { across, down } => view.pan(across, down),
             Command::ClosePicture | Command::Cancel => self.close_picture(),
             _ => {}
         }

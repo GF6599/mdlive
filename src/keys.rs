@@ -51,6 +51,14 @@ pub enum Command {
     PreviousPicture(usize),
     /// Enter: follow the marked link, or open the marked picture.
     OpenMark,
+    ZoomIn(usize),
+    ZoomOut(usize),
+    ZoomFit,
+    /// Moves the part of the picture shown, in eighths of the page.
+    Pan {
+        across: i32,
+        down: i32,
+    },
     ClosePicture,
     Edit,
     SelectLines,
@@ -168,6 +176,13 @@ pub enum Action {
     NextPicture,
     PreviousPicture,
     OpenMark,
+    ZoomIn,
+    ZoomOut,
+    ZoomFit,
+    PanLeft,
+    PanDown,
+    PanUp,
+    PanRight,
     ClosePicture,
     Edit,
     SelectLines,
@@ -211,6 +226,13 @@ impl Action {
             Self::NextPicture => "mark the next picture",
             Self::PreviousPicture => "mark the previous picture",
             Self::OpenMark => "follow the marked link, or open the marked picture",
+            Self::ZoomIn => "zoom in, in a picture",
+            Self::ZoomOut => "zoom out, in a picture",
+            Self::ZoomFit => "fit the picture to the page",
+            Self::PanLeft => "pan left, in a picture",
+            Self::PanDown => "pan down, in a picture",
+            Self::PanUp => "pan up, in a picture",
+            Self::PanRight => "pan right, in a picture",
             Self::ClosePicture => "close the picture",
             Self::Edit => "edit the file at this line",
             Self::SelectLines => "select lines",
@@ -233,7 +255,16 @@ impl Action {
             | Self::FilterTree
             | Self::Edit => Group::Files,
             Self::NextLink | Self::PreviousLink | Self::OpenMark => Group::Links,
-            Self::NextPicture | Self::PreviousPicture | Self::ClosePicture => Group::Pictures,
+            Self::NextPicture
+            | Self::PreviousPicture
+            | Self::ZoomIn
+            | Self::ZoomOut
+            | Self::ZoomFit
+            | Self::PanLeft
+            | Self::PanDown
+            | Self::PanUp
+            | Self::PanRight
+            | Self::ClosePicture => Group::Pictures,
             Self::SelectLines | Self::CopySelection => Group::Select,
             Self::Quit | Self::ToggleHelp => Group::Other,
             _ => Group::Move,
@@ -242,6 +273,7 @@ impl Action {
 
     fn command(self, count: Option<usize>) -> Command {
         let times = count.unwrap_or(1);
+        let steps = i32::try_from(times).unwrap_or(i32::MAX);
         match self {
             Self::Quit => Command::Quit,
             Self::Down => Command::Down(times),
@@ -282,6 +314,25 @@ impl Action {
             Self::NextPicture => Command::NextPicture(times),
             Self::PreviousPicture => Command::PreviousPicture(times),
             Self::OpenMark => Command::OpenMark,
+            Self::ZoomIn => Command::ZoomIn(times),
+            Self::ZoomOut => Command::ZoomOut(times),
+            Self::ZoomFit => Command::ZoomFit,
+            Self::PanLeft => Command::Pan {
+                across: -steps,
+                down: 0,
+            },
+            Self::PanDown => Command::Pan {
+                across: 0,
+                down: steps,
+            },
+            Self::PanUp => Command::Pan {
+                across: 0,
+                down: -steps,
+            },
+            Self::PanRight => Command::Pan {
+                across: steps,
+                down: 0,
+            },
             Self::ClosePicture => Command::ClosePicture,
             Self::Edit => Command::Edit,
             Self::SelectLines => Command::SelectLines,
@@ -471,6 +522,18 @@ const BINDINGS: &[Binding] = &[
     tree(&[Key::plain('h')], Action::CloseFolder),
     tree(&[Key::named(KeyCode::Left)], Action::CloseFolder),
     tree(&[Key::plain('/')], Action::FilterTree),
+    picture(&[Key::plain('+')], Action::ZoomIn),
+    picture(&[Key::plain('=')], Action::ZoomIn),
+    picture(&[Key::plain('-')], Action::ZoomOut),
+    picture(&[Key::plain('0')], Action::ZoomFit),
+    picture(&[Key::plain('h')], Action::PanLeft),
+    picture(&[Key::named(KeyCode::Left)], Action::PanLeft),
+    picture(&[Key::plain('j')], Action::PanDown),
+    picture(&[Key::named(KeyCode::Down)], Action::PanDown),
+    picture(&[Key::plain('k')], Action::PanUp),
+    picture(&[Key::named(KeyCode::Up)], Action::PanUp),
+    picture(&[Key::plain('l')], Action::PanRight),
+    picture(&[Key::named(KeyCode::Right)], Action::PanRight),
     picture(&[Key::plain('q')], Action::ClosePicture),
 ];
 
