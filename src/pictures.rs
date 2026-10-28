@@ -87,24 +87,16 @@ impl Pictures {
         let path = self
             .resolve(url)
             .ok_or_else(|| format!("not found: {url}"))?;
-        let (pixels_wide, pixels_high) = if is_svg(&path) {
-            let data = std::fs::read(&path).map_err(|error| format!("cannot read: {error}"))?;
-            svg_size(&parse_svg(&data, &usvg::Options::default())?)
-        } else {
-            ImageReader::open(&path)
-                .and_then(ImageReader::with_guessed_format)
-                .map_err(|error| error.to_string())
-                .and_then(|reader| reader.into_dimensions().map_err(|error| error.to_string()))
-                .map_err(|error| format!("cannot read: {error}"))?
-        };
-        Ok(self.fit(Source::File(path), pixels_wide, pixels_high, width))
+        let source = Source::File(path);
+        let (pixels_wide, pixels_high) = pixel_size(&source)?;
+        Ok(self.fit(source, pixels_wide, pixels_high, width))
     }
 
     /// Sizes an SVG held in memory to fit `width` columns.
     pub fn place_svg(&self, svg: Arc<str>, width: usize) -> Result<Placed, String> {
-        let (pixels_wide, pixels_high) =
-            svg_size(&parse_svg(svg.as_bytes(), &usvg::Options::default())?);
-        Ok(self.fit(Source::Svg(svg), pixels_wide, pixels_high, width))
+        let source = Source::Svg(svg);
+        let (pixels_wide, pixels_high) = pixel_size(&source)?;
+        Ok(self.fit(source, pixels_wide, pixels_high, width))
     }
 
     /// Whether the terminal draws real pixels, rather than half blocks that blur small text.
@@ -247,11 +239,7 @@ fn load(picker: &Picker, placed: &Placed) -> Result<SlicedProtocol, String> {
             let data = std::fs::read(path).map_err(|error| format!("cannot read: {error}"))?;
             draw_svg(&data, path.parent(), wide, high)?
         }
-        Source::File(path) => ImageReader::open(path)
-            .and_then(ImageReader::with_guessed_format)
-            .map_err(|error| error.to_string())
-            .and_then(|reader| reader.decode().map_err(|error| error.to_string()))
-            .map_err(|error| format!("cannot read: {error}"))?,
+        Source::File(path) => decode(path)?,
     };
     let image: DynamicImage = if image.width() != wide {
         image.resize(wide, high, FilterType::Triangle)
@@ -260,6 +248,33 @@ fn load(picker: &Picker, placed: &Placed) -> Result<SlicedProtocol, String> {
     };
     let size = Size::new(placed.columns, placed.rows);
     SlicedProtocol::new(picker, image, Some(size)).map_err(|error| format!("cannot draw: {error}"))
+}
+
+/// The size of a picture in its own pixels, from the header of a file or the size an SVG names.
+fn pixel_size(source: &Source) -> Result<(u32, u32), String> {
+    match source {
+        Source::Svg(svg) => Ok(svg_size(&parse_svg(
+            svg.as_bytes(),
+            &usvg::Options::default(),
+        )?)),
+        Source::File(path) if is_svg(path) => {
+            let data = std::fs::read(path).map_err(|error| format!("cannot read: {error}"))?;
+            Ok(svg_size(&parse_svg(&data, &usvg::Options::default())?))
+        }
+        Source::File(path) => ImageReader::open(path)
+            .and_then(ImageReader::with_guessed_format)
+            .map_err(|error| error.to_string())
+            .and_then(|reader| reader.into_dimensions().map_err(|error| error.to_string()))
+            .map_err(|error| format!("cannot read: {error}")),
+    }
+}
+
+fn decode(path: &Path) -> Result<DynamicImage, String> {
+    ImageReader::open(path)
+        .and_then(ImageReader::with_guessed_format)
+        .map_err(|error| error.to_string())
+        .and_then(|reader| reader.decode().map_err(|error| error.to_string()))
+        .map_err(|error| format!("cannot read: {error}"))
 }
 
 fn is_svg(path: &Path) -> bool {
@@ -276,14 +291,27 @@ fn svg_size(tree: &usvg::Tree) -> (u32, u32) {
     (size.width().ceil() as u32, size.height().ceil() as u32)
 }
 
-/// Draws an SVG at the size it takes on screen, so it stays sharp at any width. Its labels need
-/// the system fonts, which take a moment to load, so they load once, on the first SVG drawn.
+/// Draws an SVG at the size it takes on screen, so it stays sharp at any width.
 fn draw_svg(
     data: &[u8],
     resources: Option<&Path>,
     wide: u32,
     high: u32,
 ) -> Result<DynamicImage, String> {
+    let tree = svg_tree(data, resources)?;
+    let size = tree.size();
+    let scale = (wide as f32 / size.width()).min(high as f32 / size.height());
+    rasterize(
+        &tree,
+        Transform::from_scale(scale, scale),
+        (size.width() * scale).ceil() as u32,
+        (size.height() * scale).ceil() as u32,
+    )
+}
+
+/// Its labels need the system fonts, which take a moment to load, so they load once, on the first
+/// SVG drawn.
+fn svg_tree(data: &[u8], resources: Option<&Path>) -> Result<usvg::Tree, String> {
     static FONTS: OnceLock<Arc<usvg::fontdb::Database>> = OnceLock::new();
     let fonts = FONTS.get_or_init(|| {
         let mut fonts = usvg::fontdb::Database::new();
@@ -295,20 +323,18 @@ fn draw_svg(
         fontdb: Arc::clone(fonts),
         ..usvg::Options::default()
     };
-    let tree = parse_svg(data, &options)?;
-    let size = tree.size();
-    let scale = (wide as f32 / size.width()).min(high as f32 / size.height());
-    let (pixels_wide, pixels_high) = (
-        (size.width() * scale).ceil() as u32,
-        (size.height() * scale).ceil() as u32,
-    );
-    let mut pixmap = Pixmap::new(pixels_wide.max(1), pixels_high.max(1))
+    parse_svg(data, &options)
+}
+
+fn rasterize(
+    tree: &usvg::Tree,
+    transform: Transform,
+    wide: u32,
+    high: u32,
+) -> Result<DynamicImage, String> {
+    let mut pixmap = Pixmap::new(wide.max(1), high.max(1))
         .ok_or_else(|| "cannot draw: the picture has no area".to_string())?;
-    resvg::render(
-        &tree,
-        Transform::from_scale(scale, scale),
-        &mut pixmap.as_mut(),
-    );
+    resvg::render(tree, transform, &mut pixmap.as_mut());
     let pixels = pixmap
         .pixels()
         .iter()
