@@ -245,9 +245,12 @@ impl Pictures {
         }
     }
 
+    /// The terminal may drop the data of the page's pictures while the view covers them, and a
+    /// picture is sent only once, so the page sends each one again.
     pub fn close_view(&mut self) {
         self.view = None;
         self.decoded = None;
+        self.loaded.clear();
     }
 
     fn draw_window(&mut self, source: &Source, window: &Window) -> Result<SlicedProtocol, String> {
