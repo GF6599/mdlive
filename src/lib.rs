@@ -288,6 +288,13 @@ impl Viewer {
         self
     }
 
+    /// Draws pictures the way `picker` found the terminal can, as after a zoom changes the size of
+    /// its cells.
+    pub fn set_picker(&mut self, picker: Picker) {
+        self.pictures.set_picker(picker);
+        self.render_in_place();
+    }
+
     pub fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
         frame.buffer_mut().set_style(area, theme::page());

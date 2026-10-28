@@ -51,17 +51,25 @@ impl fmt::Debug for Pictures {
 
 impl Pictures {
     /// Pictures at relative paths are read from `base`, the folder of the Markdown file.
-    pub fn new(base: &Path, mut picker: Picker) -> Self {
-        if let Color::Rgb(r, g, b) = theme::BASE {
-            picker.set_background_color(Some(Rgba([r, g, b, u8::MAX])));
-        }
+    pub fn new(base: &Path, picker: Picker) -> Self {
         let mut pictures = Self {
             base: PathBuf::new(),
-            picker,
+            picker: Picker::halfblocks(),
             loaded: HashMap::new(),
         };
         pictures.set_base(base);
+        pictures.set_picker(picker);
         pictures
+    }
+
+    /// Draws with `picker` from now on. The loaded pictures go, because their key holds no cell
+    /// size.
+    pub fn set_picker(&mut self, mut picker: Picker) {
+        if let Color::Rgb(r, g, b) = theme::BASE {
+            picker.set_background_color(Some(Rgba([r, g, b, u8::MAX])));
+        }
+        self.picker = picker;
+        self.loaded.clear();
     }
 
     /// Reads relative paths from `base` from now on.

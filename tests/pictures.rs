@@ -9,7 +9,7 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::style::Color;
-use ratatui_image::picker::Picker;
+use ratatui_image::picker::{Picker, ProtocolType};
 use unicode_width::UnicodeWidthStr;
 
 mod common;
@@ -278,6 +278,51 @@ fn draws_site_root_and_svg_pictures_of_a_docs_page() {
     assert_eq!(painted(&buffer, 2, BLUE), columns);
     assert_eq!(painted(&buffer, 4, RED), columns);
     assert_eq!(painted(&buffer, 5, RED), columns);
+}
+
+/// `from_fontsize` is the only constructor that takes a cell size, because `from_query_stdio` asks
+/// a real terminal.
+#[allow(deprecated)]
+fn iterm2_picker(wide: u16, high: u16) -> Picker {
+    let mut picker = Picker::from_fontsize((wide, high).into());
+    picker.set_protocol_type(ProtocolType::Iterm2);
+    picker
+}
+
+/// The pixel width the iTerm2 escape on screen asks for, such as `100px`.
+fn iterm2_width(buffer: &Buffer) -> String {
+    buffer
+        .content()
+        .iter()
+        .find_map(|cell| {
+            let after = cell.symbol().split_once("]1337;File=")?.1;
+            let width = after
+                .split(';')
+                .find_map(|field| field.strip_prefix("width="))?;
+            Some(width.to_string())
+        })
+        .expect("no iTerm2 picture on screen")
+}
+
+/// After the terminal zooms, a picture is drawn again for the new cell size.
+///
+/// Why it matters: a zoom keeps the columns and rows of a picture but changes the pixels in each
+/// cell, so a picture drawn for the old cells stays at its old pixel size while the text grows.
+#[test]
+fn draws_a_picture_again_for_the_cells_of_a_zoomed_terminal() {
+    // Given: an 80 by 40 pixel picture drawn through iTerm2 on 10 by 20 pixel cells
+    let dir = tempfile::tempdir().unwrap();
+    picture(&dir.path().join("red.png"), 80, 40, 40, RED, RED);
+    let mut viewer =
+        Viewer::new("doc.md", "![red](red.png)\n").with_images(dir.path(), iterm2_picker(10, 20));
+    assert_eq!(iterm2_width(&draw(&mut viewer, 40, 6)), "100px");
+
+    // When: the terminal zooms to 20 by 40 pixel cells
+    viewer.set_picker(iterm2_picker(20, 40));
+    let buffer = draw(&mut viewer, 40, 6);
+
+    // Then: the picture fills its 10 columns at the new cell width
+    assert_eq!(iterm2_width(&buffer), "200px");
 }
 
 /// A site-root path does not look above the repository.
