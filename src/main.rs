@@ -60,11 +60,14 @@ fn main() -> ExitCode {
     // The query reads the terminal's answer from stdin, so it runs before mouse capture, which
     // would mix mouse events into the answer.
     let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
-    let cell_size = if picker.protocol_type() == ProtocolType::Halfblocks {
-        None
-    } else {
-        cell_pixels()
-    };
+    let graphics = (picker.protocol_type() != ProtocolType::Halfblocks)
+        .then(|| {
+            cell_pixels().map(|cell_size| Graphics {
+                protocol: picker.protocol_type(),
+                cell_size,
+            })
+        })
+        .flatten();
     capture_mouse();
     let viewer = Viewer::new(&title, &markdown)
         .with_opener(open_in_system)
@@ -76,7 +79,7 @@ fn main() -> ExitCode {
             .with_images(folder_of(&target), picker)
             .with_path(&target)
     };
-    let result = run(&mut terminal, viewer, watch, &changes, cell_size);
+    let result = run(&mut terminal, viewer, watch, &changes, graphics);
     release_mouse();
     ratatui::restore();
     match result {
@@ -189,23 +192,33 @@ fn cell_pixels() -> Option<(u16, u16)> {
         .then(|| (size.width / size.columns, size.height / size.rows))
 }
 
+/// How the terminal draws pictures, and the pixel size of its cells when mdlive last asked.
+#[derive(Debug)]
+struct Graphics {
+    protocol: ProtocolType,
+    cell_size: (u16, u16),
+}
+
 /// Asks the terminal how it draws pictures again when its cells change size, as a zoom does, so
-/// pictures keep their size against the text. `cell_size` is `None` where nothing can change,
+/// pictures keep their size against the text. `graphics` is `None` where nothing can change,
 /// because the terminal draws half blocks or reports no pixels.
-fn follow_zoom(viewer: &mut Viewer, cell_size: &mut Option<(u16, u16)>) {
-    let (Some(before), Some(now)) = (*cell_size, cell_pixels()) else {
+fn follow_zoom(viewer: &mut Viewer, graphics: &mut Option<Graphics>) {
+    let (Some(graphics), Some(now)) = (graphics.as_mut(), cell_pixels()) else {
         return;
     };
-    if before == now {
+    if graphics.cell_size == now {
         return;
     }
-    *cell_size = Some(now);
+    graphics.cell_size = now;
     // The query reads the answer from stdin, where mouse events would mix into it.
     release_mouse();
     let picker = Picker::from_query_stdio();
     enable_mouse();
-    if let Ok(picker) = picker {
-        viewer.set_picker(picker);
+    match picker {
+        Ok(picker) if picker.protocol_type() == graphics.protocol => viewer.set_picker(picker),
+        // A terminal that misses the query timeout gets a fallback picker, which draws half blocks.
+        Ok(_) => viewer.show_error("the terminal did not answer, so pictures keep their old size"),
+        Err(error) => viewer.show_error(&format!("cannot ask the terminal for its cells: {error}")),
     }
 }
 
@@ -216,7 +229,7 @@ fn run(
     mut viewer: Viewer,
     mut watch: OpenFileWatch,
     changes: &Receiver<Result<(), String>>,
-    mut cell_size: Option<(u16, u16)>,
+    mut graphics: Option<Graphics>,
 ) -> std::io::Result<()> {
     let mut links: Vec<LinkArea> = Vec::new();
     loop {
@@ -236,7 +249,7 @@ fn run(
                     }
                     Event::Mouse(mouse) if is_used(mouse.kind) => break viewer.handle_mouse(mouse),
                     Event::Resize(..) => {
-                        follow_zoom(&mut viewer, &mut cell_size);
+                        follow_zoom(&mut viewer, &mut graphics);
                         break Flow::Continue;
                     }
                     _ => {}
