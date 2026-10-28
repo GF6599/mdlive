@@ -152,9 +152,8 @@ fn browses_the_markdown_files_of_the_repository_in_a_tree() {
     assert_eq!(cursor(&buffer).as_deref(), Some("two.md"));
     assert!(hint_bar(&buffer).contains("j/k move  l open  h close  / filter  Esc page"));
 
-    // When: the reader presses Enter on the open file, and looks at the page
+    // When: the reader presses Enter on the open file
     press(&mut viewer, KeyCode::Enter);
-    press(&mut viewer, KeyCode::Esc);
     // Then: nothing was opened, so there is no way back
     assert!(!hint_bar(&draw(&mut viewer)).contains("C-o back"));
     type_keys(&mut viewer, "-");
@@ -168,9 +167,12 @@ fn browses_the_markdown_files_of_the_repository_in_a_tree() {
     assert!(status(&buffer).starts_with(" one.md"));
     assert!(marked(&buffer, "one.md"));
     assert!(!marked(&buffer, "two.md"));
+    // And: the page has the keys, so the reader can read the file they opened
+    assert_eq!(cursor(&buffer), None);
+    assert!(hint_bar(&buffer).contains("j/k scroll"));
 
-    // When: the reader presses h on the file, then h on its folder
-    type_keys(&mut viewer, "hh");
+    // When: the reader gives the tree the keys, then presses h on the file and h on its folder
+    type_keys(&mut viewer, "-hh");
     // Then: the cursor goes up to the folder, and the folder closes
     let buffer = draw(&mut viewer);
     assert_eq!(cursor(&buffer).as_deref(), Some("▸ 001-intro"));
@@ -181,13 +183,9 @@ fn browses_the_markdown_files_of_the_repository_in_a_tree() {
 
     // When: the reader moves down, opens the folder with l, and reads its file with l
     type_keys(&mut viewer, "jljl");
-    // Then: the file is read
-    assert_eq!(page_top(&draw(&mut viewer)), "Three");
-
-    // When: the reader presses Escape
-    press(&mut viewer, KeyCode::Esc);
     let buffer = draw(&mut viewer);
-    // Then: the tree stays open, but the page has the keys back
+    // Then: the file is read, the tree stays open, and the page has the keys
+    assert_eq!(page_top(&buffer), "Three");
     assert!(panel_title(&buffer).starts_with(&format!("┌ {name}")));
     assert_eq!(cursor(&buffer), None);
     assert!(hint_bar(&buffer).contains("j/k scroll"));
@@ -312,7 +310,8 @@ fn filters_the_tree_to_the_files_whose_path_holds_every_word() {
     assert_eq!(page_top(&buffer), "Three");
     assert!(panel_title(&buffer).contains("/thr"));
 
-    // When: the reader presses Escape
+    // When: the reader gives the tree the keys again, and presses Escape
+    type_keys(&mut viewer, "-");
     press(&mut viewer, KeyCode::Esc);
     // Then: the filter clears, and the tree keeps the keys
     let buffer = draw(&mut viewer);

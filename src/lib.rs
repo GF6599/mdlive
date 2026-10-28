@@ -1037,13 +1037,8 @@ impl Viewer {
         };
         if let Some(tree) = &mut self.tree {
             self.keys.focus = Focus::Tree;
-            if let Some(file) = tree.click(panel, row)
-                && !self
-                    .path
-                    .as_deref()
-                    .is_some_and(|path| same_file(&file, path))
-            {
-                self.open(&file);
+            if let Some(file) = tree.click(panel, row) {
+                self.read_from_tree(&file);
             }
             return;
         }
@@ -1100,6 +1095,19 @@ impl Viewer {
         }
     }
 
+    /// Reads a file the reader picked in the tree, and gives the page the keys to read it with. The
+    /// tree stays open beside the page.
+    fn read_from_tree(&mut self, file: &Path) {
+        if !self
+            .path
+            .as_deref()
+            .is_some_and(|path| same_file(file, path))
+        {
+            self.open(file);
+        }
+        self.keys.focus = Focus::Page;
+    }
+
     /// Gives the tree the keys, opening it at the root of the page's file when it is closed.
     fn enter_tree(&mut self) {
         if self.tree.is_none() {
@@ -1144,13 +1152,8 @@ impl Viewer {
             Command::End => tree.move_down(usize::MAX),
             Command::CloseFolder => tree.close_folder(),
             Command::OpenEntry => {
-                if let Some(file) = tree.open_entry()
-                    && !self
-                        .path
-                        .as_deref()
-                        .is_some_and(|path| same_file(&file, path))
-                {
-                    self.open(&file);
+                if let Some(file) = tree.open_entry() {
+                    self.read_from_tree(&file);
                 }
             }
             Command::ToggleHelp => self.help_top = Some(0),
