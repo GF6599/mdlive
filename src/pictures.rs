@@ -15,6 +15,7 @@ use ratatui_image::sliced::{SignedPosition, SlicedImage, SlicedProtocol};
 use resvg::tiny_skia::{Pixmap, Transform};
 use resvg::usvg;
 
+use crate::picture_view::{PictureView, Window};
 use crate::theme;
 
 /// A picture sized to fit the text, in cells.
@@ -37,6 +38,10 @@ pub struct Pictures {
     base: PathBuf,
     picker: Picker,
     loaded: HashMap<Placed, Result<SlicedProtocol, String>>,
+    /// The last frame of the picture view, drawn again only when the part shown changes.
+    view: Option<(Source, Window, Result<SlicedProtocol, String>)>,
+    /// The pixels of the raster picture in the view, decoded once for every frame of it.
+    decoded: Option<(PathBuf, DynamicImage)>,
 }
 
 impl fmt::Debug for Pictures {
@@ -56,6 +61,8 @@ impl Pictures {
             base: PathBuf::new(),
             picker: Picker::halfblocks(),
             loaded: HashMap::new(),
+            view: None,
+            decoded: None,
         };
         pictures.set_base(base);
         pictures.set_picker(picker);
@@ -70,6 +77,7 @@ impl Pictures {
         }
         self.picker = picker;
         self.loaded.clear();
+        self.view = None;
     }
 
     /// Reads relative paths from `base` from now on.
@@ -202,6 +210,71 @@ impl Pictures {
         }
     }
 
+    /// Draws the picture `view` fitted to `area`, in the middle of it.
+    pub fn draw_view(&mut self, frame: &mut Frame, view: &PictureView, area: Rect) {
+        let font = self.picker.font_size();
+        let window = view.frame(area.width, area.height, (font.width, font.height));
+        let current = self
+            .view
+            .as_ref()
+            .is_some_and(|(source, shown, _)| *source == view.source && *shown == window);
+        if !current {
+            let drawn = self.draw_window(&view.source, &window);
+            self.view = Some((view.source.clone(), window, drawn));
+        }
+        let Some((_, _, drawn)) = &mut self.view else {
+            return;
+        };
+        let shown = Rect {
+            x: area.x + area.width.saturating_sub(window.columns) / 2,
+            y: area.y + area.height.saturating_sub(window.rows) / 2,
+            width: window.columns,
+            height: window.rows,
+        }
+        .intersection(area);
+        match drawn {
+            Ok(protocol) => frame.render_widget(
+                SlicedImage::new(protocol, SignedPosition { x: 0, y: 0 }),
+                shown,
+            ),
+            Err(reason) => frame.render_widget(
+                Paragraph::new(Span::styled(reason.as_str(), theme::picture_note())),
+                area,
+            ),
+        }
+    }
+
+    pub fn close_view(&mut self) {
+        self.view = None;
+        self.decoded = None;
+    }
+
+    fn draw_window(&mut self, source: &Source, window: &Window) -> Result<SlicedProtocol, String> {
+        let image = match source {
+            Source::Svg(svg) => draw_svg_window(svg.as_bytes(), None, window)?,
+            Source::File(path) if is_svg(path) => {
+                let data = std::fs::read(path).map_err(|error| format!("cannot read: {error}"))?;
+                draw_svg_window(&data, path.parent(), window)?
+            }
+            Source::File(path) => {
+                if self
+                    .decoded
+                    .as_ref()
+                    .is_none_or(|(decoded, _)| decoded != path)
+                {
+                    self.decoded = Some((path.clone(), decode(path)?));
+                }
+                let Some((_, image)) = &self.decoded else {
+                    return Err("cannot read the picture".to_string());
+                };
+                crop_window(image, window)
+            }
+        };
+        let size = Size::new(window.columns, window.rows);
+        SlicedProtocol::new(&self.picker, image, Some(size))
+            .map_err(|error| format!("cannot draw: {error}"))
+    }
+
     /// Forgets the pictures a page no longer shows at these sizes.
     pub fn keep_only<'a>(&mut self, shown: impl Iterator<Item = &'a Placed>) {
         let shown: HashSet<&Placed> = shown.collect();
@@ -251,7 +324,7 @@ fn load(picker: &Picker, placed: &Placed) -> Result<SlicedProtocol, String> {
 }
 
 /// The size of a picture in its own pixels, from the header of a file or the size an SVG names.
-fn pixel_size(source: &Source) -> Result<(u32, u32), String> {
+pub fn pixel_size(source: &Source) -> Result<(u32, u32), String> {
     match source {
         Source::Svg(svg) => Ok(svg_size(&parse_svg(
             svg.as_bytes(),
@@ -275,6 +348,19 @@ fn decode(path: &Path) -> Result<DynamicImage, String> {
         .map_err(|error| error.to_string())
         .and_then(|reader| reader.decode().map_err(|error| error.to_string()))
         .map_err(|error| format!("cannot read: {error}"))
+}
+
+/// The part of `image` that `window` shows, at the pixels the frame draws.
+fn crop_window(image: &DynamicImage, window: &Window) -> DynamicImage {
+    let x = (window.x.floor() as u32).min(image.width().saturating_sub(1));
+    let y = (window.y.floor() as u32).min(image.height().saturating_sub(1));
+    let wide = ((window.x + window.wide).ceil() as u32).clamp(x + 1, image.width()) - x;
+    let high = ((window.y + window.high).ceil() as u32).clamp(y + 1, image.height()) - y;
+    image.crop_imm(x, y, wide, high).resize_exact(
+        window.pixels_wide,
+        window.pixels_high,
+        FilterType::Triangle,
+    )
 }
 
 fn is_svg(path: &Path) -> bool {
@@ -307,6 +393,26 @@ fn draw_svg(
         (size.width() * scale).ceil() as u32,
         (size.height() * scale).ceil() as u32,
     )
+}
+
+/// Draws the part of an SVG that `window` shows, at the pixels the frame draws.
+fn draw_svg_window(
+    data: &[u8],
+    resources: Option<&Path>,
+    window: &Window,
+) -> Result<DynamicImage, String> {
+    let tree = svg_tree(data, resources)?;
+    let across = f64::from(window.pixels_wide) / window.wide;
+    let down = f64::from(window.pixels_high) / window.high;
+    let transform = Transform::from_row(
+        across as f32,
+        0.0,
+        0.0,
+        down as f32,
+        (-window.x * across) as f32,
+        (-window.y * down) as f32,
+    );
+    rasterize(&tree, transform, window.pixels_wide, window.pixels_high)
 }
 
 /// Its labels need the system fonts, which take a moment to load, so they load once, on the first

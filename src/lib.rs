@@ -10,6 +10,7 @@ mod hint_bar;
 mod hyperlink;
 mod keys;
 mod math;
+mod picture_view;
 mod pictures;
 mod search;
 mod table;
@@ -37,7 +38,8 @@ use crate::folds::Folds;
 use crate::hyperlink::is_openable;
 pub use crate::hyperlink::{LinkArea, hyperlink_cells};
 use crate::keys::{Command, Focus, KeyReader};
-use crate::pictures::Pictures;
+use crate::picture_view::PictureView;
+use crate::pictures::{Pictures, pixel_size};
 use crate::search::{Match, find_all};
 use crate::tree::{Tree, root_of};
 pub use crate::watch::{FileWatch, OpenFileWatch, watch_file};
@@ -51,6 +53,7 @@ const MIN_TEXT_BESIDE_CONTENTS: u16 = 40;
 const MIN_HEADINGS_TO_OPEN_CONTENTS: usize = 3;
 /// How far one turn of the wheel moves, as most readers move a page.
 const WHEEL_LINES: usize = 3;
+const PICTURE_MARK: &str = "▶";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Flow {
@@ -130,6 +133,9 @@ pub struct Viewer {
     back: Vec<Place>,
     /// The link index of the link that Enter follows.
     marked_link: Option<usize>,
+    /// The index in the page's pictures of the picture that Enter opens.
+    marked_picture: Option<usize>,
+    picture_view: Option<PictureView>,
     opener: Handoff,
     selection: Option<Selection>,
     copier: Handoff,
@@ -168,6 +174,8 @@ impl Viewer {
             diagrams: Diagrams::default(),
             back: Vec::new(),
             marked_link: None,
+            marked_picture: None,
+            picture_view: None,
             opener: Handoff(None),
             selection: None,
             copier: Handoff(None),
@@ -272,6 +280,7 @@ impl Viewer {
         self.search = None;
         self.current_match = None;
         self.marked_link = None;
+        self.marked_picture = None;
         self.pictures.set_base(folder_of(path));
         self.top = 0;
         if let Some(width) = self.width {
@@ -306,6 +315,15 @@ impl Viewer {
         ])
         .areas(area);
 
+        if let Some(view) = &self.picture_view {
+            self.pictures.draw_view(frame, view, body);
+            self.links.clear();
+            self.link_areas.clear();
+            breadcrumb::draw(frame, header, &self.title, &[]);
+            hint_bar::draw(frame, bar, &hint_bar::hints_for(&hint_bar::Mode::Picture));
+            self.draw_status(frame, status);
+            return;
+        }
         if self.contents_open.is_none() {
             self.contents_open = Some(self.contents_fit_at_start(body.width));
         }
@@ -344,6 +362,7 @@ impl Viewer {
         self.text_area = text;
         self.mark_matches(frame, text);
         self.mark_link(frame, text);
+        self.mark_picture(frame, text);
         self.mark_selection(frame, text);
         let popup = Popup::of(&self.keys).map(|popup| (popup.area(body), popup));
         if let Some(top) = self.help_top {
@@ -383,7 +402,10 @@ impl Viewer {
             breadcrumb::sections(self.document.headings(), self.document.heading_at(self.top));
         breadcrumb::draw(frame, header, &self.title, &sections);
         hint_bar::draw(frame, bar, &hint_bar::hints_for(&self.mode()));
+        self.draw_status(frame, status);
+    }
 
+    fn draw_status(&self, frame: &mut Frame, status: Rect) {
         frame.buffer_mut().set_style(status, theme::status());
         let mut left = match (&self.prompt, &self.notice) {
             (Some(prompt), _) => {
@@ -493,6 +515,7 @@ impl Viewer {
     pub fn reload(&mut self, markdown: &str) {
         self.error = None;
         self.marked_link = None;
+        self.marked_picture = None;
         self.leave_visual();
         self.markdown = markdown.to_string();
         self.render_in_place();
@@ -557,18 +580,25 @@ impl Viewer {
         match self.keys.focus {
             Focus::Tree => return self.handle_tree_command(command, half_page),
             Focus::Visual => return self.handle_visual_command(command, half_page),
+            Focus::Picture => return self.handle_picture_command(command),
             Focus::Page => {}
         }
         match command {
             Command::Quit => return Flow::Quit,
             Command::Cancel => {
-                if self.marked_link.take().is_none() {
+                let marked = self.marked_link.take().or(self.marked_picture.take());
+                if marked.is_none() {
                     return Flow::Quit;
                 }
             }
             Command::NextLink(times) => (0..times).for_each(|_| self.step_link(true)),
             Command::PreviousLink(times) => (0..times).for_each(|_| self.step_link(false)),
-            Command::FollowLink => self.follow_marked_link(),
+            Command::NextPicture(times) => (0..times).for_each(|_| self.step_picture(true)),
+            Command::PreviousPicture(times) => (0..times).for_each(|_| self.step_picture(false)),
+            Command::OpenMark => match self.marked_picture {
+                Some(index) => self.open_picture(index),
+                None => self.follow_marked_link(),
+            },
             Command::Edit => {
                 let Some(path) = self.path.clone() else {
                     self.show_error("no file to edit");
@@ -589,7 +619,8 @@ impl Viewer {
             | Command::CloseFolder
             | Command::FilterTree
             | Command::SelectLines
-            | Command::CopySelection => {}
+            | Command::CopySelection
+            | Command::ClosePicture => {}
             Command::ToggleHelp => self.help_top = Some(0),
             Command::Back => {
                 self.step_history(|viewer| &mut viewer.back, |viewer| &mut viewer.forward)
@@ -918,6 +949,9 @@ impl Viewer {
     /// contents entry, a tree row or a link, and gives the keys to the tree or the page it lands on.
     /// A drag over the page selects lines, and the release copies them.
     pub fn handle_mouse(&mut self, event: MouseEvent) -> Flow {
+        if self.picture_view.is_some() {
+            return Flow::Continue;
+        }
         if self.prompt.is_some() || self.tree.as_ref().is_some_and(Tree::is_typing) {
             return Flow::Continue;
         }
@@ -1136,11 +1170,106 @@ impl Viewer {
             return;
         };
         self.marked_link = Some(url);
+        self.marked_picture = None;
         if line < self.top {
             self.scroll_to(line);
         } else if line >= bottom {
             self.scroll_to(line + 1 - self.page);
         }
+    }
+
+    /// Marks the picture after the marked one, or before it when not `forward`, the way
+    /// `step_link` marks links.
+    fn step_picture(&mut self, forward: bool) {
+        let pictures = self.document.pictures();
+        let bottom = self.top + self.page;
+        let marked = self.marked_picture.filter(|marked| {
+            pictures.get(*marked).is_some_and(|picture| {
+                picture.line < bottom && picture.line + usize::from(picture.placed.rows) > self.top
+            })
+        });
+        let next = match (marked, forward) {
+            (Some(at), true) => Some((at + 1).min(pictures.len() - 1)),
+            (Some(at), false) => Some(at.saturating_sub(1)),
+            (None, true) => pictures.iter().position(|picture| picture.line >= self.top),
+            (None, false) => pictures.iter().rposition(|picture| picture.line < bottom),
+        };
+        let Some(index) = next else {
+            return;
+        };
+        let line = pictures[index].line;
+        self.marked_picture = Some(index);
+        self.marked_link = None;
+        if line < self.top {
+            self.scroll_to(line);
+        } else if line >= bottom {
+            self.scroll_to(line + 1 - self.page);
+        }
+    }
+
+    fn open_picture(&mut self, index: usize) {
+        let Some(source) = self
+            .document
+            .pictures()
+            .get(index)
+            .map(|picture| picture.placed.source.clone())
+        else {
+            return;
+        };
+        match pixel_size(&source) {
+            Ok(size) => {
+                self.picture_view = Some(PictureView::new(source, size));
+                self.keys.focus = Focus::Picture;
+            }
+            Err(reason) => self.show_error(&reason),
+        }
+    }
+
+    fn handle_picture_command(&mut self, command: Command) -> Flow {
+        match command {
+            Command::Quit => return Flow::Quit,
+            Command::ClosePicture | Command::Cancel => self.close_picture(),
+            _ => {}
+        }
+        Flow::Continue
+    }
+
+    fn close_picture(&mut self) {
+        self.picture_view = None;
+        self.pictures.close_view();
+        self.keys.focus = Focus::Page;
+    }
+
+    /// Puts a marker in the margin beside the first row on screen of the marked picture, because
+    /// a graphics protocol draws over the cells that a link mark would colour.
+    fn mark_picture(&self, frame: &mut Frame, text: Rect) {
+        let Some(picture) = self
+            .marked_picture
+            .and_then(|marked| self.document.pictures().get(marked))
+        else {
+            return;
+        };
+        let end = picture.line + usize::from(picture.placed.rows);
+        let bottom = self.top + usize::from(text.height);
+        if end <= self.top || picture.line >= bottom || text.x == 0 {
+            return;
+        }
+        let (Ok(row), Ok(column)) = (
+            u16::try_from(picture.line.max(self.top) - self.top),
+            u16::try_from(picture.column),
+        ) else {
+            return;
+        };
+        let at = Rect {
+            x: (text.x + column).saturating_sub(1),
+            y: text.y + row,
+            width: 1,
+            height: 1,
+        };
+        frame.render_widget(
+            Paragraph::new(Span::styled(PICTURE_MARK, theme::link_selected())),
+            at,
+        );
     }
 
     fn follow_marked_link(&mut self) {
@@ -1256,7 +1385,9 @@ impl Viewer {
                 .then(|| self.document.headings().len()),
             search_active: self.search.is_some(),
             link_marked: self.marked_link.is_some(),
+            picture_marked: self.marked_picture.is_some(),
             has_links: !self.document.links().is_empty(),
+            has_pictures: !self.document.pictures().is_empty(),
             can_go_back: !self.back.is_empty(),
             has_folds: !self.document.folds().is_empty(),
         })

@@ -17,6 +17,7 @@ pub enum Mode {
     Tree,
     TypingFilter,
     Visual,
+    Picture,
     Reading(Reading),
 }
 
@@ -26,7 +27,9 @@ pub struct Reading {
     pub headings_in_contents: Option<usize>,
     pub search_active: bool,
     pub link_marked: bool,
+    pub picture_marked: bool,
     pub has_links: bool,
+    pub has_pictures: bool,
     pub can_go_back: bool,
     pub has_folds: bool,
 }
@@ -75,6 +78,7 @@ pub fn hints_for(mode: &Mode) -> Vec<Hint> {
             pair(Action::NextHeading, Action::PreviousHeading, "section"),
             pair(Action::HalfPageDown, Action::HalfPageUp, "half page"),
         ],
+        Mode::Picture => vec![hint(keys_of(Action::ClosePicture), "close")],
         Mode::Reading(reading) => reading_hints(reading),
     }
 }
@@ -84,13 +88,18 @@ fn reading_hints(reading: &Reading) -> Vec<Hint> {
         headings_in_contents,
         search_active,
         link_marked,
+        picture_marked,
         has_links,
+        has_pictures,
         can_go_back,
         has_folds,
     } = *reading;
     let mut bar = Vec::new();
     if link_marked {
-        bar.push(hint(keys_of(Action::FollowLink), "follow"));
+        bar.push(hint(keys_of(Action::OpenMark), "follow"));
+    }
+    if picture_marked {
+        bar.push(hint(keys_of(Action::OpenMark), "open"));
     }
     if let Some(count) = headings_in_contents.filter(|count| *count > 0) {
         let letters = hints(count.min(HINT_LETTERS_LISTED)).join("/");
@@ -130,6 +139,13 @@ fn reading_hints(reading: &Reading) -> Vec<Hint> {
     ));
     if has_links {
         bar.push(pair(Action::NextLink, Action::PreviousLink, "link"));
+    }
+    if has_pictures {
+        bar.push(pair(
+            Action::NextPicture,
+            Action::PreviousPicture,
+            "picture",
+        ));
     }
     bar.push(hint(keys_of(Action::SearchForward), "search"));
     if search_active {
