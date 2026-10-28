@@ -860,9 +860,11 @@ fn lists_every_key_on_a_help_screen() {
 
     // When: the reader types g?
     type_keys(&mut viewer, "g?");
-    let shown = body(&draw(&mut viewer, 80, 60));
+    let shown = body(&draw(&mut viewer, 80, 80));
     // Then: the screen lists each group, and each key with what it does
-    for group in ["Move", "Sections", "Search", "Folds", "Select", "Other"] {
+    for group in [
+        "Move", "Sections", "Pictures", "Search", "Folds", "Select", "Other",
+    ] {
         assert!(
             shown.iter().any(|row| row.trim() == group),
             "{group} missing"
@@ -872,6 +874,7 @@ fn lists_every_key_on_a_help_screen() {
         ("j, C-e, ↓", "scroll down"),
         ("gg, Home", "go to top or line N"),
         ("]]", "next section"),
+        ("]p", "mark the next picture"),
         ("a, s, d, …", "go to a section, with the contents open"),
         ("/", "search forward"),
         ("za", "open or close fold"),
@@ -879,7 +882,10 @@ fn lists_every_key_on_a_help_screen() {
         ("y", "copy the source of the selected lines"),
         ("g?, F1", "show the keys"),
         ("C-c", "quit"),
-        ("Esc", "drop typed keys, leave the tree or help, or quit"),
+        (
+            "Esc",
+            "drop typed keys, leave the tree, help or picture, or quit",
+        ),
     ] {
         assert!(
             shown.iter().any(|row| row
@@ -908,7 +914,7 @@ fn lists_every_key_on_a_help_screen() {
         shown
             .last()
             .unwrap()
-            .contains("drop typed keys, leave the tree or help, or quit")
+            .contains("drop typed keys, leave the tree, help or picture, or quit")
     );
 
     // When: the reader presses t

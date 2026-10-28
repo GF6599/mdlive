@@ -47,7 +47,11 @@ pub enum Command {
     FilterTree,
     NextLink(usize),
     PreviousLink(usize),
-    FollowLink,
+    NextPicture(usize),
+    PreviousPicture(usize),
+    /// Enter: follow the marked link, or open the marked picture.
+    OpenMark,
+    ClosePicture,
     Edit,
     SelectLines,
     CopySelection,
@@ -55,14 +59,15 @@ pub enum Command {
     Cancel,
 }
 
-/// What the keys act on: the page, the file tree while it has them, or the selected page lines in
-/// visual mode.
+/// What the keys act on: the page, the file tree while it has them, the selected page lines in
+/// visual mode, or a picture open on the whole page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Focus {
     #[default]
     Page,
     Tree,
     Visual,
+    Picture,
 }
 
 /// The focuses a binding acts in.
@@ -71,6 +76,7 @@ struct Scope {
     page: bool,
     tree: bool,
     visual: bool,
+    picture: bool,
 }
 
 impl Scope {
@@ -79,6 +85,7 @@ impl Scope {
             Focus::Page => self.page,
             Focus::Tree => self.tree,
             Focus::Visual => self.visual,
+            Focus::Picture => self.picture,
         }
     }
 }
@@ -89,6 +96,7 @@ pub enum Group {
     Move,
     Sections,
     Links,
+    Pictures,
     Search,
     Folds,
     Select,
@@ -97,10 +105,11 @@ pub enum Group {
 }
 
 impl Group {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Move,
         Self::Sections,
         Self::Links,
+        Self::Pictures,
         Self::Search,
         Self::Folds,
         Self::Select,
@@ -113,6 +122,7 @@ impl Group {
             Self::Move => "Move",
             Self::Sections => "Sections",
             Self::Links => "Links",
+            Self::Pictures => "Pictures",
             Self::Search => "Search",
             Self::Folds => "Folds",
             Self::Select => "Select",
@@ -155,7 +165,10 @@ pub enum Action {
     FilterTree,
     NextLink,
     PreviousLink,
-    FollowLink,
+    NextPicture,
+    PreviousPicture,
+    OpenMark,
+    ClosePicture,
     Edit,
     SelectLines,
     CopySelection,
@@ -195,7 +208,10 @@ impl Action {
             Self::FilterTree => "filter the files, in the tree",
             Self::NextLink => "mark the next link",
             Self::PreviousLink => "mark the previous link",
-            Self::FollowLink => "follow the marked link",
+            Self::NextPicture => "mark the next picture",
+            Self::PreviousPicture => "mark the previous picture",
+            Self::OpenMark => "follow the marked link, or open the marked picture",
+            Self::ClosePicture => "close the picture",
             Self::Edit => "edit the file at this line",
             Self::SelectLines => "select lines",
             Self::CopySelection => "copy the source of the selected lines",
@@ -216,7 +232,8 @@ impl Action {
             | Self::CloseFolder
             | Self::FilterTree
             | Self::Edit => Group::Files,
-            Self::NextLink | Self::PreviousLink | Self::FollowLink => Group::Links,
+            Self::NextLink | Self::PreviousLink | Self::OpenMark => Group::Links,
+            Self::NextPicture | Self::PreviousPicture | Self::ClosePicture => Group::Pictures,
             Self::SelectLines | Self::CopySelection => Group::Select,
             Self::Quit | Self::ToggleHelp => Group::Other,
             _ => Group::Move,
@@ -262,7 +279,10 @@ impl Action {
             Self::FilterTree => Command::FilterTree,
             Self::NextLink => Command::NextLink(times),
             Self::PreviousLink => Command::PreviousLink(times),
-            Self::FollowLink => Command::FollowLink,
+            Self::NextPicture => Command::NextPicture(times),
+            Self::PreviousPicture => Command::PreviousPicture(times),
+            Self::OpenMark => Command::OpenMark,
+            Self::ClosePicture => Command::ClosePicture,
             Self::Edit => Command::Edit,
             Self::SelectLines => Command::SelectLines,
             Self::CopySelection => Command::CopySelection,
@@ -339,6 +359,7 @@ const NONE: Scope = Scope {
     page: false,
     tree: false,
     visual: false,
+    picture: false,
 };
 
 /// A key of the page and the tree.
@@ -357,6 +378,7 @@ const fn move_key(keys: &'static [Key], action: Action) -> Binding {
         page: true,
         tree: true,
         visual: true,
+        ..NONE
     };
     scoped(keys, action, scope)
 }
@@ -389,6 +411,14 @@ const fn visual(keys: &'static [Key], action: Action) -> Binding {
     scoped(keys, action, scope)
 }
 
+const fn picture(keys: &'static [Key], action: Action) -> Binding {
+    let scope = Scope {
+        picture: true,
+        ..NONE
+    };
+    scoped(keys, action, scope)
+}
+
 /// Every key sequence the reader accepts. The first binding of an action is the one a hint shows.
 const BINDINGS: &[Binding] = &[
     bind(&[Key::plain('q')], Action::Quit),
@@ -413,7 +443,9 @@ const BINDINGS: &[Binding] = &[
     page_move(&[Key::plain('['), Key::plain('[')], Action::PreviousHeading),
     page(&[Key::plain(']'), Key::plain('l')], Action::NextLink),
     page(&[Key::plain('['), Key::plain('l')], Action::PreviousLink),
-    page(&[Key::named(KeyCode::Enter)], Action::FollowLink),
+    page(&[Key::plain(']'), Key::plain('p')], Action::NextPicture),
+    page(&[Key::plain('['), Key::plain('p')], Action::PreviousPicture),
+    page(&[Key::named(KeyCode::Enter)], Action::OpenMark),
     page_move(&[Key::plain('}')], Action::NextBlock),
     page_move(&[Key::plain('{')], Action::PreviousBlock),
     page(&[Key::plain('t')], Action::ToggleContents),
@@ -439,6 +471,7 @@ const BINDINGS: &[Binding] = &[
     tree(&[Key::plain('h')], Action::CloseFolder),
     tree(&[Key::named(KeyCode::Left)], Action::CloseFolder),
     tree(&[Key::plain('/')], Action::FilterTree),
+    picture(&[Key::plain('q')], Action::ClosePicture),
 ];
 
 /// Quits from anywhere, even partway through a key sequence.
@@ -502,7 +535,7 @@ pub fn key_list(group: Group) -> Vec<(String, &'static str)> {
             (QUIT_ANYWHERE.label(), Action::Quit.label()),
             (
                 CANCEL.label(),
-                "drop typed keys, leave the tree or help, or quit",
+                "drop typed keys, leave the tree, help or picture, or quit",
             ),
         ]),
         _ => {}
