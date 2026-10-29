@@ -1,7 +1,9 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use mdlive::{Flow, Viewer, theme};
+use std::collections::VecDeque;
+
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use mdlive::{Flow, Viewer, handle_burst, theme};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -1776,4 +1778,27 @@ fn keeps_the_reading_position_on_a_page_with_notes_defined_mid_page() {
 
     // Then: the same paragraph is still at the top
     assert_eq!(screen[0], " end paragraph");
+}
+
+/// A key that leaves the page ends a burst, and the keys queued after it stay unread.
+///
+/// Why it matters: keys typed after a quit or an edit key are meant for what comes next, such as
+/// the editor, and must not move the page first.
+#[test]
+fn stops_a_burst_of_keys_at_the_key_that_leaves_the_page() {
+    // Given: a page, and j, q and j queued
+    let mut viewer = Viewer::new("doc.md", "one\n\ntwo\n");
+    let key = |c| Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    let mut queued = VecDeque::from([key('j'), key('q'), key('j')]);
+
+    // When: mdlive handles the input that is ready
+    let flow = handle_burst(
+        || Ok(queued.pop_front()),
+        |event| viewer.handle_event(event),
+    )
+    .unwrap();
+
+    // Then: the burst ends with the quit, and the last j stays queued
+    assert!(matches!(flow, Some(Flow::Quit)));
+    assert_eq!(queued.len(), 1);
 }
