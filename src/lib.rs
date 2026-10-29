@@ -1,4 +1,5 @@
 mod breadcrumb;
+pub mod config;
 mod contents;
 mod diagrams;
 mod document;
@@ -316,6 +317,12 @@ impl Viewer {
             self.render(width);
             self.top = self.document.screen_line_of(source_line);
         }
+    }
+
+    #[must_use]
+    pub fn with_palette(mut self, palette: &'static Palette) -> Self {
+        self.palette = palette;
+        self
     }
 
     /// Reads pictures at relative paths from `base`, the folder of the Markdown file, and draws

@@ -11,6 +11,7 @@ use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode, window_size,
 };
+use mdlive::config::{self, Config};
 use mdlive::{Flow, LinkArea, OpenFileWatch, Viewer, draw_frame, folder_of, handle_burst};
 use ratatui_image::picker::{Picker, ProtocolType};
 
@@ -24,6 +25,18 @@ fn main() -> ExitCode {
     let (target, None) = (args.next().map(PathBuf::from), args.next()) else {
         eprintln!("usage: mdlive [file.md | folder]");
         return ExitCode::from(2);
+    };
+    let config = config::path(
+        std::env::var_os("XDG_CONFIG_HOME"),
+        std::env::var_os("HOME"),
+    )
+    .map_or_else(|| Ok(Config::default()), |path| Config::read(&path));
+    let config = match config {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("mdlive: {error}");
+            return ExitCode::FAILURE;
+        }
     };
     let target = target.unwrap_or_else(|| PathBuf::from("."));
     let name = target.canonicalize().unwrap_or_else(|_| target.clone());
@@ -67,6 +80,7 @@ fn main() -> ExitCode {
         .flatten();
     capture_mouse();
     let viewer = Viewer::new(&title, &markdown)
+        .with_palette(config.palette)
         .with_opener(open_in_system)
         .with_copier(copy_to_clipboard);
     let viewer = if target.is_dir() {

@@ -43,6 +43,13 @@ pub const ROSE_PINE: Palette = Palette {
     highlight_high: Color::Rgb(0x52, 0x4f, 0x67),
 };
 
+/// Every theme a config file can name.
+pub const THEMES: &[&Palette] = &[&ROSE_PINE];
+
+pub fn named(name: &str) -> Option<&'static Palette> {
+    THEMES.iter().copied().find(|palette| palette.name == name)
+}
+
 impl Palette {
     /// The page leaves its background to the terminal, so a terminal with opacity or a background
     /// picture shows through.

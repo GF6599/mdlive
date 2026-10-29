@@ -62,6 +62,16 @@ A relative path, such as `img/plot.png` or `../shared/plot.png`, starts at the f
 
 A path from the root, such as `/diagrams/plot.svg`, is found the way a docs site serves it. mdlive first tries the path as it stands on disk. Then it looks in `public/`, in `static/` and in the folder itself, starting at the folder of the page and going up one folder at a time. It stops at the root of the git repository, so it never takes a picture from another project.
 
+### Settings
+
+mdlive reads `~/.config/mdlive/config.toml`, or `$XDG_CONFIG_HOME/mdlive/config.toml` when that variable is set. The file is optional, and it takes one key:
+
+```toml
+theme = "rose-pine"
+```
+
+`rose-pine` is the default and the only theme. The page shows the terminal's own background, so a terminal with opacity or a background picture shows through. A file with an unknown theme, an unknown key or a typo stops mdlive at startup with a message that names the problem.
+
 ## Development
 
 ```sh
