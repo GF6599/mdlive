@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use image::{Rgb, RgbImage};
+use image::{Rgb, RgbImage, Rgba, RgbaImage};
 use mdlive::{Viewer, theme};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -80,6 +80,45 @@ fn draws_a_local_picture_at_docs_site_size_between_the_blocks() {
     }
     assert_eq!(row(&buffer, 5), "");
     assert_eq!(row(&buffer, 6), " after");
+}
+
+/// A transparent part of a picture shows the terminal background in a terminal that draws
+/// transparency, and the page colour in one that cannot.
+///
+/// Why it matters: a logo with a transparent ground drawn on a fill shows a dark box in a terminal
+/// with opacity or a background picture.
+#[test]
+fn keeps_the_transparent_pixels_of_a_picture_where_the_terminal_draws_them() {
+    // Given: a picture whose top half is transparent and whose lower half is red
+    let dir = tempfile::tempdir().unwrap();
+    RgbaImage::from_fn(80, 40, |_, y| {
+        Rgba(if y < 20 {
+            [0, 0, 0, 0]
+        } else {
+            [255, 0, 0, 255]
+        })
+    })
+    .save(dir.path().join("logo.png"))
+    .unwrap();
+    let markdown = "![logo](logo.png)\n";
+
+    // When: the page is drawn in a Kitty terminal
+    let mut kitty = Picker::halfblocks();
+    kitty.set_protocol_type(ProtocolType::Kitty);
+    let mut page = Viewer::new("doc.md", markdown).with_images(dir.path(), kitty);
+    let pixels = common::kitty_pixels(&draw(&mut page, 40, 10));
+    // Then: the top left pixel it sends is still transparent
+    assert_eq!(pixels[3], 0);
+
+    // When: the page is drawn in half blocks
+    let buffer = draw(&mut viewer(dir.path(), markdown), 40, 10);
+    // Then: the transparent half takes the page colour, because a half block cannot be clear
+    for x in 1..11 {
+        assert_eq!(
+            (buffer[(x, 0)].fg, buffer[(x, 0)].bg),
+            (theme::BASE, theme::BASE)
+        );
+    }
 }
 
 /// A picture wider than the text shrinks to the text width and keeps its shape, and a picture in

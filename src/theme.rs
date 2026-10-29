@@ -19,7 +19,14 @@ pub const LEAF: Color = Color::Rgb(0x95, 0xb1, 0xac);
 pub const HL_MED: Color = Color::Rgb(0x40, 0x3d, 0x52);
 pub const HL_HIGH: Color = Color::Rgb(0x52, 0x4f, 0x67);
 
+/// The page leaves its background to the terminal, so a terminal with opacity or a background
+/// picture shows through.
 pub fn page() -> Style {
+    Style::new().fg(TEXT).bg(Color::Reset)
+}
+
+/// A popup floats over the text of the page, so it takes a fill to stand apart from it.
+pub fn popup() -> Style {
     Style::new().fg(TEXT).bg(BASE)
 }
 
@@ -59,14 +66,6 @@ pub fn marker() -> Style {
 
 pub fn diagram() -> Style {
     Style::new().fg(SUBTLE)
-}
-
-/// A colour as `#rrggbb`, for renderers that take CSS colours.
-pub fn hex(color: Color) -> String {
-    match color {
-        Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
-        _ => String::from("#000000"),
-    }
 }
 
 pub fn picture_note() -> Style {
