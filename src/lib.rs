@@ -505,6 +505,16 @@ impl Viewer {
         &self.links
     }
 
+    /// The Kitty commands for the picture view that go out after the cells of the last frame.
+    pub fn take_picture_commands(&mut self) -> String {
+        self.pictures.take_commands()
+    }
+
+    /// Tells the viewer that the terminal cleared the screen, as ratatui does on each resize.
+    pub fn screen_cleared(&mut self) {
+        self.pictures.screen_cleared();
+    }
+
     /// The links in view, cut where the contents panel covers the page, and
     /// without the ones the `covered` key popup overlaps.
     fn links_on_screen(
