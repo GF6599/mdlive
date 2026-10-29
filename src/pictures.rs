@@ -5,8 +5,8 @@ use std::sync::{Arc, OnceLock};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use image::imageops::FilterType;
-use image::{DynamicImage, ImageReader, Rgba};
+use image::imageops::{self, FilterType};
+use image::{DynamicImage, ImageReader, Rgba, RgbaImage};
 use ratatui::Frame;
 use ratatui::layout::{Rect, Size};
 use ratatui::style::Color;
@@ -90,10 +90,7 @@ impl Pictures {
 
     /// Draws with `picker` from now on. The loaded pictures go, because their key holds no cell
     /// size.
-    pub fn set_picker(&mut self, mut picker: Picker) {
-        if let Color::Rgb(r, g, b) = theme::BASE {
-            picker.set_background_color(Some(Rgba([r, g, b, u8::MAX])));
-        }
+    pub fn set_picker(&mut self, picker: Picker) {
         self.picker = picker;
         self.loaded.clear();
         self.pixels.clear();
@@ -357,9 +354,7 @@ impl Pictures {
                 crop_window(image, window)
             }
         };
-        let size = Size::new(window.columns, window.rows);
-        SlicedProtocol::new(&self.picker, image, Some(size))
-            .map_err(|error| format!("cannot draw: {error}"))
+        encode(&self.picker, image, Size::new(window.columns, window.rows))
     }
 
     /// Forgets the pictures a page no longer shows at these sizes.
@@ -403,8 +398,28 @@ fn load(
             image
         }
     };
-    let size = Size::new(placed.columns, placed.rows);
+    encode(picker, image, Size::new(placed.columns, placed.rows))
+}
+
+/// Half blocks and sixel have no clear pixel, so the transparent parts of a picture take the page
+/// colour there. Kitty and iTerm2 keep them clear, and the terminal background shows through.
+fn encode(picker: &Picker, image: DynamicImage, size: Size) -> Result<SlicedProtocol, String> {
+    let image = match picker.protocol_type() {
+        ProtocolType::Halfblocks | ProtocolType::Sixel if image.color().has_alpha() => {
+            on_page_colour(&image)
+        }
+        _ => image,
+    };
     SlicedProtocol::new(picker, image, Some(size)).map_err(|error| format!("cannot draw: {error}"))
+}
+
+fn on_page_colour(image: &DynamicImage) -> DynamicImage {
+    let Color::Rgb(r, g, b) = theme::BASE else {
+        return image.clone();
+    };
+    let mut ground = RgbaImage::from_pixel(image.width(), image.height(), Rgba([r, g, b, u8::MAX]));
+    imageops::overlay(&mut ground, image, 0, 0);
+    DynamicImage::ImageRgba8(ground)
 }
 
 /// The pixels of a placed picture at the size of its cells.

@@ -7,7 +7,7 @@ use mdlive::{Flow, Viewer, handle_burst, theme};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
-use ratatui::style::Modifier;
+use ratatui::style::{Color, Modifier};
 use unicode_width::UnicodeWidthStr;
 
 mod common;
@@ -263,6 +263,36 @@ fn styles_text_with_the_reading_palette() {
     assert_eq!(cell("link").fg, theme::FOAM);
     assert_eq!(cell("code").fg, theme::ROSE);
     assert_eq!(cell("code").bg, theme::OVERLAY);
+}
+
+/// The page and the contents beside it leave their background to the terminal, while a code
+/// block, the status line and a key popup keep their fills.
+///
+/// Why it matters: a terminal with opacity or a background picture shows through only the cells
+/// on its default colour, and a popup with no fill blends into the page under it.
+#[test]
+fn shows_the_terminal_background_behind_the_page_and_keeps_the_panel_fills() {
+    // Given: three headings, text and a code block, on a screen wide enough for the contents
+    let markdown = "# One\n\ntext\n\n## Two\n\n```\nlet x\n```\n\n## Three\n\nmore\n";
+    let mut viewer = Viewer::new("doc.md", markdown);
+
+    // When: it is drawn
+    let buffer = draw(&mut viewer, 132, 14);
+    let cell = |text: &str| buffer[find(&buffer, text)].clone();
+
+    // Then: the text, the right margin and the contents use the terminal background
+    assert_eq!(cell("text").bg, Color::Reset);
+    assert_eq!(buffer[(131, find(&buffer, "text").1)].bg, Color::Reset);
+    assert_eq!(cell("Contents").bg, Color::Reset);
+    // And: the code block and the status line keep their fills
+    assert_eq!(cell("let x").bg, theme::SURFACE);
+    assert_eq!(buffer[(0, buffer.area.height - 1)].bg, theme::SURFACE);
+
+    // When: the reader presses z
+    type_keys(&mut viewer, "z");
+    let buffer = draw(&mut viewer, 132, 14);
+    // Then: the key popup keeps its fill over the page
+    assert_eq!(buffer[find(&buffer, "open all folds")].bg, theme::BASE);
 }
 
 /// The scroll keys move through the page, stop at both ends, and the status line shows where.
@@ -1138,7 +1168,7 @@ fn searches_the_rendered_text_with_smartcase_and_marks_every_match() {
     // Then: only the capitalised word matches
     let buffer = draw(&mut viewer, 40, 5);
     assert_eq!(buffer[(6, 0)].bg, theme::ROSE);
-    assert_eq!(buffer[(20, 0)].bg, theme::BASE);
+    assert_eq!(buffer[(20, 0)].bg, Color::Reset);
 
     // When: the file is saved with a new first line whose word sits where the current match was
     viewer.reload(&format!("Some Bold here\n\n{markdown}"));

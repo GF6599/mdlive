@@ -63,7 +63,7 @@ impl Popup {
             ));
         let inner = block.inner(area);
         frame.render_widget(Clear, area);
-        frame.render_widget(block.style(theme::page()), area);
+        frame.render_widget(block.style(theme::popup()), area);
         let lines: Vec<Line> = self
             .entries
             .iter()

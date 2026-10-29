@@ -5,8 +5,6 @@ use std::sync::Arc;
 
 use mermaid_rs_renderer::{RenderOptions, Theme};
 
-use crate::theme;
-
 /// Mermaid blocks drawn as SVG, kept by their source because one takes about 20 ms to draw and
 /// a page is laid out again on every save, resize and fold.
 #[derive(Default)]
@@ -45,7 +43,7 @@ impl Diagrams {
 fn draw_svg(source: &str) -> Result<Arc<str>, String> {
     let options = RenderOptions {
         theme: Theme {
-            background: theme::hex(theme::SURFACE),
+            background: String::from("transparent"),
             ..Theme::dark()
         },
         ..RenderOptions::default()

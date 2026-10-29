@@ -5,6 +5,8 @@ use std::cell::RefCell;
 use std::io::{self, Write};
 use std::rc::Rc;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use ratatui::backend::CrosstermBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -57,4 +59,16 @@ pub fn terminal(width: u16, height: u16) -> (Terminal<CrosstermBackend<Output>>,
     let viewport = Viewport::Fixed(Rect::new(0, 0, width, height));
     let terminal = Terminal::with_options(backend, TerminalOptions { viewport }).unwrap();
     (terminal, output)
+}
+
+/// The pixels of the one Kitty picture that `buffer` sends, as RGBA bytes from the top left.
+pub fn kitty_pixels(buffer: &Buffer) -> Vec<u8> {
+    let sent: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+    let payload: String = sent
+        .split("\x1b_G")
+        .skip(1)
+        .filter_map(|command| command.split("\x1b\\").next()?.split_once(';'))
+        .map(|(_, data)| data)
+        .collect();
+    STANDARD.decode(payload).unwrap()
 }

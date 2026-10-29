@@ -70,6 +70,20 @@ fn draws_a_mermaid_block_as_a_picture_in_a_terminal_with_graphics() {
     );
 }
 
+/// A diagram drawn as a picture has no ground of its own, so the terminal background shows
+/// around its boxes.
+///
+/// Why it matters: a diagram on a fill shows a dark block in a terminal with opacity or a
+/// background picture.
+#[test]
+fn draws_a_diagram_on_the_terminal_background() {
+    // When: a page with a flowchart is drawn in a kitty terminal
+    let pixels = common::kitty_pixels(&draw(kitty(), FLOW, 60, 20));
+
+    // Then: the top left pixel, outside every box, is transparent
+    assert_eq!(pixels[3], 0);
+}
+
 /// Without graphics, a Mermaid block is drawn as box text.
 ///
 /// Why it matters: a picture in half blocks turns the labels into blurs, while box text keeps
