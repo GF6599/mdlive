@@ -11,70 +11,72 @@ use syntect::highlighting::{
 use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
 
-use crate::theme;
+use crate::theme::Palette;
 
 /// bat's grammars, which add TypeScript, TOML and others to syntect's own set. Loading them takes
 /// about 100 ms in a release build, so it happens once for the life of the process, not per reload.
 static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(two_face::syntax::extra_newlines);
-static ROSE_PINE: LazyLock<Theme> = LazyLock::new(rose_pine);
 
 /// Rose Pine's own mapping of token kinds to colours.
-const TOKENS: &[(&str, Color, FontStyle)] = &[
-    (
-        "comment, punctuation.definition.comment",
-        theme::MUTED,
-        FontStyle::ITALIC,
-    ),
-    (
-        "string, constant.character, punctuation.definition.string",
-        theme::GOLD,
-        FontStyle::empty(),
-    ),
-    (
-        "constant.numeric, constant.language",
-        theme::GOLD,
-        FontStyle::empty(),
-    ),
-    (
-        "keyword, storage, keyword.operator.word",
-        theme::PINE,
-        FontStyle::empty(),
-    ),
-    (
-        "keyword.operator, punctuation",
-        theme::SUBTLE,
-        FontStyle::empty(),
-    ),
-    (
-        "entity.name.function, support.function, meta.function-call",
-        theme::ROSE,
-        FontStyle::empty(),
-    ),
-    (
-        "entity.name.type, entity.name.class, support.type, support.class",
-        theme::FOAM,
-        FontStyle::empty(),
-    ),
-    ("entity.name.tag", theme::FOAM, FontStyle::empty()),
-    (
-        "entity.other.attribute-name",
-        theme::IRIS,
-        FontStyle::empty(),
-    ),
-    (
-        "variable.language, support.constant",
-        theme::LOVE,
-        FontStyle::empty(),
-    ),
-];
+fn tokens(palette: &Palette) -> [(&'static str, Color, FontStyle); 10] {
+    [
+        (
+            "comment, punctuation.definition.comment",
+            palette.muted,
+            FontStyle::ITALIC,
+        ),
+        (
+            "string, constant.character, punctuation.definition.string",
+            palette.gold,
+            FontStyle::empty(),
+        ),
+        (
+            "constant.numeric, constant.language",
+            palette.gold,
+            FontStyle::empty(),
+        ),
+        (
+            "keyword, storage, keyword.operator.word",
+            palette.pine,
+            FontStyle::empty(),
+        ),
+        (
+            "keyword.operator, punctuation",
+            palette.subtle,
+            FontStyle::empty(),
+        ),
+        (
+            "entity.name.function, support.function, meta.function-call",
+            palette.rose,
+            FontStyle::empty(),
+        ),
+        (
+            "entity.name.type, entity.name.class, support.type, support.class",
+            palette.foam,
+            FontStyle::empty(),
+        ),
+        ("entity.name.tag", palette.foam, FontStyle::empty()),
+        (
+            "entity.other.attribute-name",
+            palette.iris,
+            FontStyle::empty(),
+        ),
+        (
+            "variable.language, support.constant",
+            palette.love,
+            FontStyle::empty(),
+        ),
+    ]
+}
 
 /// One styled line per source line, or `None` when no grammar knows `language`.
-pub fn highlight(code: &str, language: &str) -> Option<Vec<Vec<Span<'static>>>> {
+pub fn highlight(code: &str, language: &str, palette: &Palette) -> Option<Vec<Vec<Span<'static>>>> {
     if language.is_empty() {
         return None;
     }
     let syntax = SYNTAXES.find_syntax_by_token(language)?;
-    let mut highlighter = HighlightLines::new(syntax, &ROSE_PINE);
+    let theme = code_theme(palette);
+    let mut highlighter = HighlightLines::new(syntax, &theme);
     let mut lines = Vec::new();
     for line in LinesWithEndings::from(code) {
         let ranges = highlighter.highlight_line(line, &SYNTAXES).ok()?;
@@ -112,10 +114,10 @@ fn syntect_color(color: Color) -> syntect_style::Color {
     }
 }
 
-fn rose_pine() -> Theme {
-    let scopes = TOKENS
-        .iter()
-        .filter_map(|&(selector, color, font_style)| {
+fn code_theme(palette: &Palette) -> Theme {
+    let scopes = tokens(palette)
+        .into_iter()
+        .filter_map(|(selector, color, font_style)| {
             Some(ThemeItem {
                 scope: ScopeSelectors::from_str(selector).ok()?,
                 style: StyleModifier {
@@ -127,10 +129,10 @@ fn rose_pine() -> Theme {
         })
         .collect();
     Theme {
-        name: Some("Rose Pine".to_string()),
+        name: Some(palette.name.to_string()),
         author: None,
         settings: ThemeSettings {
-            foreground: Some(syntect_color(theme::TEXT)),
+            foreground: Some(syntect_color(palette.text)),
             ..ThemeSettings::default()
         },
         scopes,

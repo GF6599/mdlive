@@ -5,7 +5,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::keys::{KeyReader, next_keys};
-use crate::theme;
+use crate::theme::Palette;
 
 const GAP: &str = "  ";
 
@@ -52,24 +52,24 @@ impl Popup {
         self.entries.iter().map(measure).max().unwrap_or(0)
     }
 
-    pub fn draw(&self, frame: &mut Frame, area: Rect) {
+    pub fn draw(&self, frame: &mut Frame, area: Rect, palette: &Palette) {
         let key_width = self.width_of(|(key, _)| key.width());
         let block = Block::new()
             .borders(Borders::ALL)
-            .border_style(theme::panel_border())
+            .border_style(palette.panel_border())
             .title(Span::styled(
                 format!(" {} ", self.title),
-                theme::panel_title(),
+                palette.panel_title(),
             ));
         let inner = block.inner(area);
         frame.render_widget(Clear, area);
-        frame.render_widget(block.style(theme::popup()), area);
+        frame.render_widget(block.style(palette.popup()), area);
         let lines: Vec<Line> = self
             .entries
             .iter()
             .map(|(key, label)| {
                 Line::from(vec![
-                    Span::styled(format!(" {key:<key_width$}"), theme::hint()),
+                    Span::styled(format!(" {key:<key_width$}"), palette.hint()),
                     Span::raw(format!("{GAP}{label}")),
                 ])
             })

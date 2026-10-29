@@ -7,26 +7,32 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::document::Heading;
 use crate::keys::hints;
-use crate::theme;
+use crate::theme::Palette;
 
 pub const WIDTH: u16 = 30;
 const MARKER: &str = "◀";
 const INDENT: usize = 2;
 
 /// Draws the headings as a list, marking `current` and scrolling so it stays in view.
-pub fn draw(frame: &mut Frame, area: Rect, headings: &[Heading], current: Option<usize>) {
+pub fn draw(
+    frame: &mut Frame,
+    area: Rect,
+    headings: &[Heading],
+    current: Option<usize>,
+    palette: &Palette,
+) {
     let block = Block::new()
         .borders(Borders::ALL)
-        .border_style(theme::panel_border())
-        .title(Span::styled(" Contents ", theme::panel_title()));
+        .border_style(palette.panel_border())
+        .title(Span::styled(" Contents ", palette.panel_title()));
     let inner = block.inner(area);
     frame.render_widget(Clear, area);
-    frame.render_widget(block.style(theme::page()), area);
+    frame.render_widget(block.style(palette.page()), area);
 
     let rows = usize::from(inner.height);
     let text_width = usize::from(inner.width).saturating_sub(MARKER.width());
     if headings.is_empty() {
-        let note = Span::styled(" No headings", theme::html());
+        let note = Span::styled(" No headings", palette.html());
         frame.render_widget(Paragraph::new(Line::from(note)), inner);
         return;
     }
@@ -52,15 +58,15 @@ pub fn draw(frame: &mut Frame, area: Rect, headings: &[Heading], current: Option
             let text = fit(&heading.text, text_width.saturating_sub(lead.width()));
             let pad = " ".repeat(text_width.saturating_sub(lead.width() + text.width()));
             let (style, marker) = if current == Some(index) {
-                (theme::contents_marked(), MARKER)
+                (palette.contents_marked(), MARKER)
             } else {
-                (theme::contents_entry(heading.level), " ")
+                (palette.contents_entry(heading.level), " ")
             };
             Line::from(vec![
-                Span::styled(lead, theme::hint()),
+                Span::styled(lead, palette.hint()),
                 Span::styled(text, style),
                 Span::raw(pad),
-                Span::styled(marker, theme::contents_marked()),
+                Span::styled(marker, palette.contents_marked()),
             ])
         })
         .collect();

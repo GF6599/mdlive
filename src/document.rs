@@ -16,7 +16,7 @@ use crate::highlight::highlight;
 use crate::math::{display_rows, to_unicode};
 use crate::pictures::{Pictures, Placed};
 use crate::table::{self, Cell};
-use crate::theme;
+use crate::theme::Palette;
 use crate::wrap::{BREAK, Run, hard_wrap, wrap, wrap_runs};
 
 const BULLET: &str = "• ";
@@ -96,8 +96,17 @@ impl Document {
         folds: &Folds,
         pictures: &Pictures,
         diagrams: &Diagrams,
+        palette: &Palette,
     ) -> Self {
-        Builder::new(markdown, width.max(1), folds.clone(), pictures, diagrams).build(markdown)
+        Builder::new(
+            markdown,
+            width.max(1),
+            folds.clone(),
+            pictures,
+            diagrams,
+            palette,
+        )
+        .build(markdown)
     }
 
     pub fn pictures(&self) -> &[Picture] {
@@ -262,6 +271,7 @@ struct Builder<'a> {
     width: usize,
     pictures: &'a Pictures,
     diagrams: &'a Diagrams,
+    palette: &'a Palette,
     /// The address of the picture the parser is inside, and whether it opened its paragraph.
     image: Option<(String, bool)>,
     /// A picture that is the whole of its paragraph so far, with its alt text.
@@ -293,6 +303,7 @@ impl<'a> Builder<'a> {
         fold_states: Folds,
         pictures: &'a Pictures,
         diagrams: &'a Diagrams,
+        palette: &'a Palette,
     ) -> Self {
         let line_starts = std::iter::once(0)
             .chain(markdown.match_indices('\n').map(|(at, _)| at + 1))
@@ -301,6 +312,7 @@ impl<'a> Builder<'a> {
             width,
             pictures,
             diagrams,
+            palette,
             image: None,
             lone_picture: None,
             line_starts,
@@ -411,10 +423,10 @@ impl<'a> Builder<'a> {
             Event::End(tag) => self.end(tag),
             Event::Text(text) => self.text(&text, range),
             Event::Code(code) => {
-                self.inline(&code, range, theme::inline_code());
+                self.inline(&code, range, self.palette.inline_code());
             }
             Event::InlineHtml(html) if !is_comment(&html) => {
-                self.inline(&html, range, theme::html());
+                self.inline(&html, range, self.palette.html());
             }
             Event::Html(html) => {
                 if !matches!(self.block, Some((Block::Raw { .. }, _))) {
@@ -435,7 +447,7 @@ impl<'a> Builder<'a> {
                 }
             }
             Event::InlineMath(latex) => {
-                self.inline(&to_unicode(&latex), range, theme::math());
+                self.inline(&to_unicode(&latex), range, self.palette.math());
             }
             Event::DisplayMath(latex)
                 if matches!(
@@ -443,12 +455,12 @@ impl<'a> Builder<'a> {
                     Some((Block::Table { .. } | Block::Heading { .. }, _))
                 ) =>
             {
-                self.inline(&to_unicode(&latex), range, theme::math());
+                self.inline(&to_unicode(&latex), range, self.palette.math());
             }
             Event::DisplayMath(latex) => self.push_display_math(&latex, range.start),
             Event::FootnoteReference(label) => {
                 let number = self.footnote_number(&label);
-                self.inline(&superscript(number), range, theme::link());
+                self.inline(&superscript(number), range, self.palette.link());
             }
             Event::SoftBreak => self.inline(" ", range, Style::new()),
             Event::HardBreak => self.inline(BREAK, range, Style::new()),
@@ -457,7 +469,7 @@ impl<'a> Builder<'a> {
                 self.blank_before_block();
                 let rule = "─".repeat(self.content_width());
                 let line = self.source_line(range.start);
-                self.push_line(vec![Span::styled(rule, theme::rule())], true, line);
+                self.push_line(vec![Span::styled(rule, self.palette.rule())], true, line);
                 self.gap = true;
             }
             _ => {}
@@ -501,7 +513,7 @@ impl<'a> Builder<'a> {
                 self.blank_before_block();
                 self.containers.push(Container::Quote(kind));
                 if let Some(kind) = kind {
-                    let label = Span::styled(alert_label(kind), theme::alert_label(kind));
+                    let label = Span::styled(alert_label(kind), self.palette.alert_label(kind));
                     let line = self.source_line(range.start);
                     self.push_line(vec![label], true, line);
                 }
@@ -550,9 +562,9 @@ impl<'a> Builder<'a> {
                     row.push(Vec::new());
                 }
             }
-            Tag::Emphasis => self.styles.push(theme::emphasis()),
-            Tag::Strong => self.styles.push(theme::strong()),
-            Tag::Strikethrough => self.styles.push(theme::strikethrough()),
+            Tag::Emphasis => self.styles.push(self.palette.emphasis()),
+            Tag::Strong => self.styles.push(self.palette.strong()),
+            Tag::Strikethrough => self.styles.push(self.palette.strikethrough()),
             Tag::Image { dest_url, .. } => {
                 let opens_paragraph = match &self.block {
                     None => true,
@@ -562,7 +574,7 @@ impl<'a> Builder<'a> {
                 self.image = Some((dest_url.to_string(), opens_paragraph));
             }
             Tag::Link { dest_url, .. } => {
-                self.styles.push(theme::link());
+                self.styles.push(self.palette.link());
                 self.document.urls.push(dest_url.to_string());
                 self.link = Some(self.document.urls.len() - 1);
             }
@@ -631,7 +643,7 @@ impl<'a> Builder<'a> {
             .iter()
             .any(|container| matches!(container, Container::Quote(None)))
         {
-            theme::quote()
+            self.palette.quote()
         } else {
             Style::new()
         }
@@ -675,7 +687,7 @@ impl<'a> Builder<'a> {
             }
             Some((Block::Heading { spans, level }, _)) => {
                 spans.push((
-                    Span::styled(text.to_string(), theme::heading(*level).patch(style)),
+                    Span::styled(text.to_string(), self.palette.heading(*level).patch(style)),
                     link,
                 ));
             }
@@ -729,7 +741,7 @@ impl<'a> Builder<'a> {
                         .collect(),
                 });
                 self.push_wrapped(&spans, width, line);
-                if let Some((glyph, style)) = theme::heading_rule(level) {
+                if let Some((glyph, style)) = self.palette.heading_rule(level) {
                     self.push_line(vec![Span::styled(glyph.repeat(width), style)], false, line);
                 }
             }
@@ -738,7 +750,7 @@ impl<'a> Builder<'a> {
             }
             Block::Code { text, language } => self.push_code(&text, &language, width, line),
             Block::Table { alignments, rows } => {
-                for (index, row) in table::lay_out(&rows, &alignments, width)
+                for (index, row) in table::lay_out(&rows, &alignments, width, self.palette)
                     .into_iter()
                     .enumerate()
                 {
@@ -777,8 +789,8 @@ impl<'a> Builder<'a> {
                             open,
                         });
                         let spans = vec![
-                            Span::styled(marker, theme::marker()),
-                            Span::styled(summary, theme::strong()),
+                            Span::styled(marker, self.palette.marker()),
+                            Span::styled(summary, self.palette.strong()),
                         ];
                         self.push_line(spans, true, line);
                         self.gap = true;
@@ -795,7 +807,7 @@ impl<'a> Builder<'a> {
     fn push_source(&mut self, text: &str, width: usize, line: usize) {
         let mut first = true;
         for row in text.trim_end_matches('\n').lines() {
-            for part in hard_wrap(&[Span::styled(row.to_string(), theme::html())], width) {
+            for part in hard_wrap(&[Span::styled(row.to_string(), self.palette.html())], width) {
                 self.push_line(part, first, line);
                 first = false;
             }
@@ -807,13 +819,16 @@ impl<'a> Builder<'a> {
         let key_width = pairs.iter().map(|(key, _)| key.width()).max().unwrap_or(0) + 2;
         let value_width = width.saturating_sub(key_width).max(1);
         for (key, value) in pairs {
-            let value = [Span::styled(value.clone(), theme::front_matter_value())];
+            let value = [Span::styled(
+                value.clone(),
+                self.palette.front_matter_value(),
+            )];
             for (index, row) in wrap(&value, value_width).into_iter().enumerate() {
                 let lead = if index == 0 { key.as_str() } else { "" };
                 let pad = " ".repeat(key_width - lead.width());
                 let mut spans = vec![Span::styled(
                     format!("{lead}{pad}"),
-                    theme::front_matter_key(),
+                    self.palette.front_matter_key(),
                 )];
                 spans.extend(row);
                 self.push_line(spans, index == 0, line);
@@ -838,7 +853,7 @@ impl<'a> Builder<'a> {
         let line = self.source_line(offset);
         let rows = display_rows(latex, width);
         if let [row] = rows.as_slice() {
-            for (index, part) in wrap(&[Span::styled(row.clone(), theme::math())], width)
+            for (index, part) in wrap(&[Span::styled(row.clone(), self.palette.math())], width)
                 .into_iter()
                 .enumerate()
             {
@@ -851,7 +866,10 @@ impl<'a> Builder<'a> {
             let used = rows.iter().map(|row| row.width()).max().unwrap_or(0);
             let indent = " ".repeat(width.saturating_sub(used) / 2);
             for (index, row) in rows.into_iter().enumerate() {
-                let spans = vec![Span::raw(indent.clone()), Span::styled(row, theme::math())];
+                let spans = vec![
+                    Span::raw(indent.clone()),
+                    Span::styled(row, self.palette.math()),
+                ];
                 self.push_line(spans, index == 0, line);
             }
         }
@@ -870,10 +888,10 @@ impl<'a> Builder<'a> {
             Ok(placed) => self.push_placed(placed, line),
             Err(reason) => {
                 let runs = [
-                    (Span::styled(PICTURE_MARKER, theme::marker()), None),
+                    (Span::styled(PICTURE_MARKER, self.palette.marker()), None),
                     (Span::styled(alt.to_string(), base), None),
                     (
-                        Span::styled(format!(" ({reason})"), theme::picture_note()),
+                        Span::styled(format!(" ({reason})"), self.palette.picture_note()),
                         None,
                     ),
                 ];
@@ -910,7 +928,11 @@ impl<'a> Builder<'a> {
             match diagrams::text(source, width) {
                 Ok(rows) => {
                     for (index, row) in rows.into_iter().enumerate() {
-                        self.push_line(vec![Span::styled(row, theme::diagram())], index == 0, line);
+                        self.push_line(
+                            vec![Span::styled(row, self.palette.diagram())],
+                            index == 0,
+                            line,
+                        );
                     }
                     return;
                 }
@@ -919,7 +941,7 @@ impl<'a> Builder<'a> {
         };
         self.push_code(source, "mermaid", width, line);
         let note = [(
-            Span::styled(format!("(diagram: {failure})"), theme::picture_note()),
+            Span::styled(format!("(diagram: {failure})"), self.palette.picture_note()),
             None,
         )];
         self.push_wrapped(&note, width, line);
@@ -962,12 +984,12 @@ impl<'a> Builder<'a> {
     fn push_code(&mut self, text: &str, language: &str, width: usize, line: usize) {
         let inner = width.saturating_sub(2).max(1);
         let text = text.trim_end_matches('\n').replace('\t', TAB);
-        let rows = highlight(&text, language).unwrap_or_else(|| {
+        let rows = highlight(&text, language, self.palette).unwrap_or_else(|| {
             text.split('\n')
-                .map(|row| vec![Span::styled(row.to_string(), theme::code_block())])
+                .map(|row| vec![Span::styled(row.to_string(), self.palette.code_block())])
                 .collect()
         });
-        let panel = theme::code_block();
+        let panel = self.palette.code_block();
         let fill = |content: Vec<Span<'static>>| {
             let used: usize = content.iter().map(|span| span.content.width()).sum();
             let mut spans = vec![Span::styled(" ", panel)];
@@ -1011,9 +1033,11 @@ impl<'a> Builder<'a> {
         let mut spans = Vec::new();
         for container in &mut self.containers {
             match container {
-                Container::Quote(kind) => spans.push(Span::styled(QUOTE_BAR, quote_bar(*kind))),
+                Container::Quote(kind) => {
+                    spans.push(Span::styled(QUOTE_BAR, quote_bar(self.palette, *kind)))
+                }
                 Container::Item { marker, shown } if first && !*shown => {
-                    spans.push(Span::styled(marker.clone(), theme::marker()));
+                    spans.push(Span::styled(marker.clone(), self.palette.marker()));
                     *shown = true;
                 }
                 Container::Item { marker, .. } => spans.push(Span::raw(" ".repeat(marker.width()))),
@@ -1038,8 +1062,8 @@ fn container_width(container: &Container) -> usize {
     }
 }
 
-fn quote_bar(kind: Option<BlockQuoteKind>) -> Style {
-    kind.map_or_else(theme::marker, theme::alert)
+fn quote_bar(palette: &Palette, kind: Option<BlockQuoteKind>) -> Style {
+    kind.map_or_else(|| palette.marker(), |kind| palette.alert(kind))
 }
 
 fn alert_label(kind: BlockQuoteKind) -> &'static str {
