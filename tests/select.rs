@@ -48,7 +48,10 @@ fn press(viewer: &mut Viewer, code: KeyCode) {
 
 /// The page rows with any cell in the selection colour, the cursor row included.
 fn selected_rows(buffer: &Buffer) -> Vec<u16> {
-    let colours = [theme::selection().bg, theme::selection_cursor().bg];
+    let colours = [
+        theme::ROSE_PINE.selection().bg,
+        theme::ROSE_PINE.selection_cursor().bg,
+    ];
     (0..PAGE_ROWS)
         .filter(|&y| (0..buffer.area.width).any(|x| colours.contains(&Some(buffer[(x, y)].bg))))
         .collect()
@@ -56,7 +59,7 @@ fn selected_rows(buffer: &Buffer) -> Vec<u16> {
 
 /// The page row in the cursor colour.
 fn cursor_row(buffer: &Buffer) -> Option<u16> {
-    let colour = theme::selection_cursor().bg;
+    let colour = theme::ROSE_PINE.selection_cursor().bg;
     (0..PAGE_ROWS).find(|&y| (0..buffer.area.width).any(|x| Some(buffer[(x, y)].bg) == colour))
 }
 
@@ -191,7 +194,10 @@ fn copies_with_the_contents_open_and_colours_only_the_page() {
 
     // Then: the panel columns carry no selection colour, and the paragraph on the middle row is
     // copied without the blank line after it
-    let colours = [theme::selection().bg, theme::selection_cursor().bg];
+    let colours = [
+        theme::ROSE_PINE.selection().bg,
+        theme::ROSE_PINE.selection_cursor().bg,
+    ];
     let middle = PAGE_ROWS / 2;
     assert!(row(&buffer, middle).ends_with("beta"));
     assert!((0..30).all(|x| !colours.contains(&Some(buffer[(x, middle)].bg))));

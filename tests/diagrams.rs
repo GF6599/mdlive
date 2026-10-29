@@ -132,6 +132,9 @@ fn shows_the_source_and_the_reason_for_a_block_it_cannot_draw() {
             .iter()
             .position(|row| row.starts_with(" (diagram: "))
             .unwrap_or_else(|| panic!("no reason: {screen:#?}"));
-        assert_eq!(buffer[(2, u16::try_from(note).unwrap())].fg, theme::MUTED);
+        assert_eq!(
+            buffer[(2, u16::try_from(note).unwrap())].fg,
+            theme::ROSE_PINE.muted
+        );
     }
 }

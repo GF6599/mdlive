@@ -44,7 +44,10 @@ fn hint_bar(viewer: &mut Viewer) -> String {
 
 /// Whether any cell carries the colour of a search match.
 fn marks_a_match(buffer: &Buffer) -> bool {
-    let colours = [theme::search_match().bg, theme::search_current().bg];
+    let colours = [
+        theme::ROSE_PINE.search_match().bg,
+        theme::ROSE_PINE.search_current().bg,
+    ];
     buffer
         .content()
         .iter()

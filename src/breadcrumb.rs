@@ -6,7 +6,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::contents::fit;
 use crate::document::Heading;
-use crate::theme;
+use crate::theme::Palette;
 
 const SEPARATOR: &str = " › ";
 const ELLIPSIS: &str = "…";
@@ -30,7 +30,7 @@ pub fn sections(headings: &[Heading], current: Option<usize>) -> Vec<&str> {
 
 /// Draws ` file › outer › … › section` in `area`. When it does not fit, the outer sections give
 /// way to an ellipsis first, because the innermost one says where the reader is.
-pub fn draw(frame: &mut Frame, area: Rect, file: &str, sections: &[&str]) {
+pub fn draw(frame: &mut Frame, area: Rect, file: &str, sections: &[&str], palette: &Palette) {
     let width = usize::from(area.width);
     let mut skipped = 0;
     while skipped + 1 < sections.len()
@@ -38,23 +38,23 @@ pub fn draw(frame: &mut Frame, area: Rect, file: &str, sections: &[&str]) {
     {
         skipped += 1;
     }
-    let mut spans = vec![Span::styled(format!(" {file}"), theme::breadcrumb())];
+    let mut spans = vec![Span::styled(format!(" {file}"), palette.breadcrumb())];
     if skipped > 0 {
-        spans.push(Span::styled(SEPARATOR, theme::breadcrumb_separator()));
-        spans.push(Span::styled(ELLIPSIS, theme::breadcrumb()));
+        spans.push(Span::styled(SEPARATOR, palette.breadcrumb_separator()));
+        spans.push(Span::styled(ELLIPSIS, palette.breadcrumb()));
     }
     let shown = &sections[skipped..];
     for (index, section) in shown.iter().enumerate() {
-        spans.push(Span::styled(SEPARATOR, theme::breadcrumb_separator()));
+        spans.push(Span::styled(SEPARATOR, palette.breadcrumb_separator()));
         if index + 1 == shown.len() {
             let used: usize = spans.iter().map(|span| span.content.width()).sum();
             let room = width.saturating_sub(used);
             spans.push(Span::styled(
                 fit(section, room),
-                theme::breadcrumb_current(),
+                palette.breadcrumb_current(),
             ));
         } else {
-            spans.push(Span::styled(*section, theme::breadcrumb()));
+            spans.push(Span::styled(*section, palette.breadcrumb()));
         }
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);

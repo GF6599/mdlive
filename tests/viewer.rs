@@ -254,15 +254,15 @@ fn styles_text_with_the_reading_palette() {
 
     // Then: each kind carries its own style
     assert!(cell("Head").modifier.contains(Modifier::BOLD));
-    assert_eq!(cell("━").fg, theme::ROSE);
-    assert_eq!(cell("Sub").fg, theme::FOAM);
+    assert_eq!(cell("━").fg, theme::ROSE_PINE.rose);
+    assert_eq!(cell("Sub").fg, theme::ROSE_PINE.foam);
     assert!(cell("bold").modifier.contains(Modifier::BOLD));
     assert!(cell("soft").modifier.contains(Modifier::ITALIC));
-    assert_eq!(cell("soft").fg, theme::SUBTLE);
+    assert_eq!(cell("soft").fg, theme::ROSE_PINE.subtle);
     assert!(cell("gone").modifier.contains(Modifier::CROSSED_OUT));
-    assert_eq!(cell("link").fg, theme::FOAM);
-    assert_eq!(cell("code").fg, theme::ROSE);
-    assert_eq!(cell("code").bg, theme::OVERLAY);
+    assert_eq!(cell("link").fg, theme::ROSE_PINE.foam);
+    assert_eq!(cell("code").fg, theme::ROSE_PINE.rose);
+    assert_eq!(cell("code").bg, theme::ROSE_PINE.overlay);
 }
 
 /// The page and the contents beside it leave their background to the terminal, while a code
@@ -285,14 +285,20 @@ fn shows_the_terminal_background_behind_the_page_and_keeps_the_panel_fills() {
     assert_eq!(buffer[(131, find(&buffer, "text").1)].bg, Color::Reset);
     assert_eq!(cell("Contents").bg, Color::Reset);
     // And: the code block and the status line keep their fills
-    assert_eq!(cell("let x").bg, theme::SURFACE);
-    assert_eq!(buffer[(0, buffer.area.height - 1)].bg, theme::SURFACE);
+    assert_eq!(cell("let x").bg, theme::ROSE_PINE.surface);
+    assert_eq!(
+        buffer[(0, buffer.area.height - 1)].bg,
+        theme::ROSE_PINE.surface
+    );
 
     // When: the reader presses z
     type_keys(&mut viewer, "z");
     let buffer = draw(&mut viewer, 132, 14);
     // Then: the key popup keeps its fill over the page
-    assert_eq!(buffer[find(&buffer, "open all folds")].bg, theme::BASE);
+    assert_eq!(
+        buffer[find(&buffer, "open all folds")].bg,
+        theme::ROSE_PINE.base
+    );
 }
 
 /// The scroll keys move through the page, stop at both ends, and the status line shows where.
@@ -790,8 +796,8 @@ fn shows_the_keys_for_what_the_reader_is_doing_in_a_bar() {
     );
     // And: each key stands out from its label
     let (x, y) = find(&buffer, "j/k scroll");
-    assert_eq!(buffer[(x, y)].fg, theme::hint().fg.unwrap());
-    assert_ne!(buffer[(x + 4, y)].fg, theme::hint().fg.unwrap());
+    assert_eq!(buffer[(x, y)].fg, theme::ROSE_PINE.hint().fg.unwrap());
+    assert_ne!(buffer[(x + 4, y)].fg, theme::ROSE_PINE.hint().fg.unwrap());
 
     // When: the reader starts a search
     type_keys(&mut viewer, "/");
@@ -1077,14 +1083,14 @@ fn steps_through_the_matches_of_a_search() {
     // Then: the match already on screen is the current one, and the page does not move
     let buffer = draw(&mut viewer, 30, 7);
     assert_eq!(body(&buffer)[4], " line 3 needle");
-    assert_eq!(buffer[(8, 4)].bg, theme::ROSE);
+    assert_eq!(buffer[(8, 4)].bg, theme::ROSE_PINE.rose);
 
     // When: the reader presses n, then n again
     type_keys(&mut viewer, "n");
     // Then: each next match comes to the top as the current one
     let buffer = draw(&mut viewer, 30, 7);
     assert_eq!(body(&buffer)[0], " line 15 needle");
-    assert_eq!(buffer[(9, 0)].bg, theme::ROSE);
+    assert_eq!(buffer[(9, 0)].bg, theme::ROSE_PINE.rose);
     type_keys(&mut viewer, "n");
     assert_eq!(body(&draw(&mut viewer, 30, 7))[0], " line 25 needle");
 
@@ -1130,7 +1136,7 @@ fn searches_backward_reports_a_missing_pattern_and_cancels_on_escape() {
     let buffer = draw(&mut viewer, 60, 7);
     assert_eq!(body(&buffer)[0], " line 25 needle");
     let (x, y) = find(&buffer, "Pattern not found: absent");
-    assert_eq!(buffer[(x, y)].fg, theme::LOVE);
+    assert_eq!(buffer[(x, y)].fg, theme::ROSE_PINE.love);
 
     // When: the reader types /line 3 and presses Escape
     type_keys(&mut viewer, "/line 3");
@@ -1159,23 +1165,23 @@ fn searches_the_rendered_text_with_smartcase_and_marks_every_match() {
     // Then: both are marked, the first as the current match
     let buffer = draw(&mut viewer, 40, 5);
     assert_eq!(body(&buffer)[0], " Some Bold text and bold again");
-    assert_eq!(buffer[(6, 0)].bg, theme::ROSE);
-    assert_eq!(buffer[(20, 0)].bg, theme::GOLD);
+    assert_eq!(buffer[(6, 0)].bg, theme::ROSE_PINE.rose);
+    assert_eq!(buffer[(20, 0)].bg, theme::ROSE_PINE.gold);
 
     // When: the reader searches with a capital letter
     type_keys(&mut viewer, "/Bold");
     press(&mut viewer, KeyCode::Enter);
     // Then: only the capitalised word matches
     let buffer = draw(&mut viewer, 40, 5);
-    assert_eq!(buffer[(6, 0)].bg, theme::ROSE);
+    assert_eq!(buffer[(6, 0)].bg, theme::ROSE_PINE.rose);
     assert_eq!(buffer[(20, 0)].bg, Color::Reset);
 
     // When: the file is saved with a new first line whose word sits where the current match was
     viewer.reload(&format!("Some Bold here\n\n{markdown}"));
     // Then: the marks move with the text, and none takes the current colour from the old place
     let buffer = draw(&mut viewer, 40, 5);
-    assert_eq!(buffer[(6, 0)].bg, theme::GOLD);
-    assert_eq!(buffer[(6, 2)].bg, theme::GOLD);
+    assert_eq!(buffer[(6, 0)].bg, theme::ROSE_PINE.gold);
+    assert_eq!(buffer[(6, 2)].bg, theme::ROSE_PINE.gold);
 }
 
 /// Inline math shows as Unicode text in the math colour, inside the sentence around it.
@@ -1192,8 +1198,8 @@ fn renders_inline_math_as_unicode_text() {
 
     // Then: the formulas read as symbols, in the math colour, and the words stay plain
     assert_eq!(body(&buffer)[0], " Energy E = mc² and αᵢ here.");
-    assert_eq!(buffer[find(&buffer, "mc²")].fg, theme::IRIS);
-    assert_eq!(buffer[find(&buffer, "here")].fg, theme::TEXT);
+    assert_eq!(buffer[find(&buffer, "mc²")].fg, theme::ROSE_PINE.iris);
+    assert_eq!(buffer[find(&buffer, "here")].fg, theme::ROSE_PINE.text);
 }
 
 /// Display math sits centred on its own lines, also when it is written inside a paragraph.
@@ -1335,8 +1341,8 @@ fn shows_front_matter_as_keys_and_values() {
             " Body",
         ]
     );
-    assert_eq!(buffer[find(&buffer, "title")].fg, theme::MUTED);
-    assert_eq!(buffer[find(&buffer, "Notes")].fg, theme::SUBTLE);
+    assert_eq!(buffer[find(&buffer, "title")].fg, theme::ROSE_PINE.muted);
+    assert_eq!(buffer[find(&buffer, "Notes")].fg, theme::ROSE_PINE.subtle);
 }
 
 /// A list written as indented items joins with commas, and a quoted value loses its quotes.
@@ -1380,7 +1386,7 @@ fn shows_front_matter_it_cannot_read_as_source() {
         body(&buffer)[..6],
         [" ---", " nested:", "   key: value", " ---", "", " Text"]
     );
-    assert_eq!(buffer[find(&buffer, "nested")].fg, theme::MUTED);
+    assert_eq!(buffer[find(&buffer, "nested")].fg, theme::ROSE_PINE.muted);
 }
 
 /// A details block shows only its summary until it is opened with the vim fold keys.
@@ -1532,8 +1538,8 @@ fn shows_html_as_source_and_hides_comments() {
             "",
         ]
     );
-    assert_eq!(buffer[find(&buffer, "<span>")].fg, theme::MUTED);
-    assert_eq!(buffer[find(&buffer, "<kbd>")].fg, theme::MUTED);
+    assert_eq!(buffer[find(&buffer, "<span>")].fg, theme::ROSE_PINE.muted);
+    assert_eq!(buffer[find(&buffer, "<kbd>")].fg, theme::ROSE_PINE.muted);
 }
 
 const SECTIONS: &str = "intro\n\n## Notes\n\nfirst section\n\n## Notes\n\nline one\n\nline two\n\nline three\n\nline four\n";
@@ -1629,15 +1635,15 @@ fn highlights_code_by_its_language() {
     let cell = |text: &str| buffer[find(&buffer, text)].clone();
 
     // Then: keywords, strings and comments each take their colour
-    assert_eq!(cell("fn").fg, theme::PINE);
-    assert_eq!(cell("\"hi\"").fg, theme::GOLD);
-    assert_eq!(cell("// a note").fg, theme::MUTED);
+    assert_eq!(cell("fn").fg, theme::ROSE_PINE.pine);
+    assert_eq!(cell("\"hi\"").fg, theme::ROSE_PINE.gold);
+    assert_eq!(cell("// a note").fg, theme::ROSE_PINE.muted);
     assert!(cell("// a note").modifier.contains(Modifier::ITALIC));
-    assert_eq!(cell("const").fg, theme::PINE);
+    assert_eq!(cell("const").fg, theme::ROSE_PINE.pine);
 
     // And: the wrapped row of the comment keeps the panel to its last column
     let (_, wrapped) = find(&buffer, "past the edge");
-    assert_eq!(buffer[(40, wrapped)].bg, theme::SURFACE);
+    assert_eq!(buffer[(40, wrapped)].bg, theme::ROSE_PINE.surface);
 }
 
 /// Code in an unknown language, or with no language, shows as plain text on the panel.
@@ -1652,8 +1658,11 @@ fn shows_code_in_an_unknown_language_as_plain_text() {
     let buffer = draw(&mut Viewer::new("doc.md", markdown), 42, 11);
 
     // Then: both show in the plain text colour
-    assert_eq!(buffer[find(&buffer, "fn unknown")].fg, theme::TEXT);
-    assert_eq!(buffer[find(&buffer, "fn bare")].fg, theme::TEXT);
+    assert_eq!(
+        buffer[find(&buffer, "fn unknown")].fg,
+        theme::ROSE_PINE.text
+    );
+    assert_eq!(buffer[find(&buffer, "fn bare")].fg, theme::ROSE_PINE.text);
 }
 
 /// A table draws its cells in a grid, aligned the way its delimiter row says.
@@ -1681,13 +1690,16 @@ fn draws_a_table_aligned_by_its_delimiter_row() {
             " └───────┴──────┴──────┘",
         ]
     );
-    assert_eq!(buffer[find(&buffer, "Name")].fg, theme::SUBTLE);
+    assert_eq!(buffer[find(&buffer, "Name")].fg, theme::ROSE_PINE.subtle);
     assert!(
         buffer[find(&buffer, "Name")]
             .modifier
             .contains(Modifier::BOLD)
     );
-    assert_eq!(buffer[find(&buffer, "┌")].fg, theme::HL_MED);
+    assert_eq!(
+        buffer[find(&buffer, "┌")].fg,
+        theme::ROSE_PINE.highlight_med
+    );
 }
 
 /// A table wider than the screen narrows its widest column and wraps the cells in it.
@@ -1751,10 +1763,10 @@ fn labels_and_colours_alert_blocks() {
         body(&buffer),
         [" ▎ Warning", " ▎ Mind the gap.", "", " ▎ plain quote", ""]
     );
-    assert_eq!(buffer[(1, 0)].fg, theme::GOLD);
-    assert_eq!(buffer[find(&buffer, "Warning")].fg, theme::GOLD);
-    assert_eq!(buffer[find(&buffer, "Mind")].fg, theme::TEXT);
-    assert_eq!(buffer[(1, 3)].fg, theme::ROSE);
+    assert_eq!(buffer[(1, 0)].fg, theme::ROSE_PINE.gold);
+    assert_eq!(buffer[find(&buffer, "Warning")].fg, theme::ROSE_PINE.gold);
+    assert_eq!(buffer[find(&buffer, "Mind")].fg, theme::ROSE_PINE.text);
+    assert_eq!(buffer[(1, 3)].fg, theme::ROSE_PINE.rose);
 }
 
 /// Footnote references show as superscript numbers in the order they are read, and the notes

@@ -18,7 +18,7 @@ use resvg::tiny_skia::{Pixmap, Transform};
 use resvg::usvg;
 
 use crate::picture_view::{PictureView, Window};
-use crate::theme;
+use crate::theme::Palette;
 
 /// A picture sized to fit the text, in cells.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -199,13 +199,14 @@ impl Pictures {
         placed: &Placed,
         area: Rect,
         position: SignedPosition,
+        palette: &Palette,
     ) {
         let picker = &self.picker;
         let pixels = &mut self.pixels;
         let loaded = self
             .loaded
             .entry(placed.clone())
-            .or_insert_with(|| load(picker, pixels, placed));
+            .or_insert_with(|| load(picker, pixels, placed, palette));
         match loaded {
             Ok(protocol) => frame.render_widget(SlicedImage::new(protocol, position), area),
             Err(reason) => {
@@ -221,7 +222,7 @@ impl Pictures {
                 }
                 .intersection(area);
                 frame.render_widget(
-                    Paragraph::new(Span::styled(reason.as_str(), theme::picture_note())),
+                    Paragraph::new(Span::styled(reason.as_str(), palette.picture_note())),
                     line,
                 );
             }
@@ -230,7 +231,13 @@ impl Pictures {
 
     /// Draws the part of the picture `view` that fits `area`, in the middle of it. An SVG is drawn
     /// again at each zoom so that it stays sharp.
-    pub fn draw_view(&mut self, frame: &mut Frame, view: &mut PictureView, area: Rect) {
+    pub fn draw_view(
+        &mut self,
+        frame: &mut Frame,
+        view: &mut PictureView,
+        area: Rect,
+        palette: &Palette,
+    ) {
         let font = self.picker.font_size();
         let window = view.frame(area.width, area.height, (font.width, font.height));
         let shown = Rect {
@@ -251,7 +258,7 @@ impl Pictures {
                     self.commands.push_str(&place(size, &window, shown));
                 }
                 Err(reason) => frame.render_widget(
-                    Paragraph::new(Span::styled(reason, theme::picture_note())),
+                    Paragraph::new(Span::styled(reason, palette.picture_note())),
                     area,
                 ),
             }
@@ -262,7 +269,7 @@ impl Pictures {
             .as_ref()
             .is_some_and(|(source, shown, _)| *source == view.source && *shown == window);
         if !current {
-            let drawn = self.draw_window(&view.source, &window);
+            let drawn = self.draw_window(&view.source, &window, palette);
             self.view = Some((view.source.clone(), window, drawn));
         }
         let Some((_, _, drawn)) = &mut self.view else {
@@ -274,7 +281,7 @@ impl Pictures {
                 shown,
             ),
             Err(reason) => frame.render_widget(
-                Paragraph::new(Span::styled(reason.as_str(), theme::picture_note())),
+                Paragraph::new(Span::styled(reason.as_str(), palette.picture_note())),
                 area,
             ),
         }
@@ -333,7 +340,12 @@ impl Pictures {
         sent
     }
 
-    fn draw_window(&mut self, source: &Source, window: &Window) -> Result<SlicedProtocol, String> {
+    fn draw_window(
+        &mut self,
+        source: &Source,
+        window: &Window,
+        palette: &Palette,
+    ) -> Result<SlicedProtocol, String> {
         let image = match source {
             Source::Svg(svg) => draw_svg_window(svg.as_bytes(), None, window)?,
             Source::File(path) if is_svg(path) => {
@@ -354,7 +366,12 @@ impl Pictures {
                 crop_window(image, window)
             }
         };
-        encode(&self.picker, image, Size::new(window.columns, window.rows))
+        encode(
+            &self.picker,
+            image,
+            Size::new(window.columns, window.rows),
+            palette,
+        )
     }
 
     /// Forgets the pictures a page no longer shows at these sizes.
@@ -389,6 +406,7 @@ fn load(
     picker: &Picker,
     pixels: &mut HashMap<Placed, DynamicImage>,
     placed: &Placed,
+    palette: &Palette,
 ) -> Result<SlicedProtocol, String> {
     let image = match pixels.get(placed) {
         Some(image) => image.clone(),
@@ -398,23 +416,33 @@ fn load(
             image
         }
     };
-    encode(picker, image, Size::new(placed.columns, placed.rows))
+    encode(
+        picker,
+        image,
+        Size::new(placed.columns, placed.rows),
+        palette,
+    )
 }
 
 /// Half blocks and sixel have no clear pixel, so the transparent parts of a picture take the page
 /// colour there. Kitty and iTerm2 keep them clear, and the terminal background shows through.
-fn encode(picker: &Picker, image: DynamicImage, size: Size) -> Result<SlicedProtocol, String> {
+fn encode(
+    picker: &Picker,
+    image: DynamicImage,
+    size: Size,
+    palette: &Palette,
+) -> Result<SlicedProtocol, String> {
     let image = match picker.protocol_type() {
         ProtocolType::Halfblocks | ProtocolType::Sixel if image.color().has_alpha() => {
-            on_page_colour(&image)
+            on_page_colour(&image, palette.base)
         }
         _ => image,
     };
     SlicedProtocol::new(picker, image, Some(size)).map_err(|error| format!("cannot draw: {error}"))
 }
 
-fn on_page_colour(image: &DynamicImage) -> DynamicImage {
-    let Color::Rgb(r, g, b) = theme::BASE else {
+fn on_page_colour(image: &DynamicImage, colour: Color) -> DynamicImage {
+    let Color::Rgb(r, g, b) = colour else {
         return image.clone();
     };
     let mut ground = RgbaImage::from_pixel(image.width(), image.height(), Rgba([r, g, b, u8::MAX]));

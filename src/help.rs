@@ -5,12 +5,12 @@ use ratatui::widgets::{Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::keys::{Group, key_list};
-use crate::theme;
+use crate::theme::Palette;
 
 const GAP: &str = "  ";
 
 /// Each group title, then its keys and what each does, with the labels in one column.
-fn lines() -> Vec<Line<'static>> {
+fn lines(palette: &Palette) -> Vec<Line<'static>> {
     let groups: Vec<_> = Group::ALL
         .iter()
         .map(|group| (group.title(), key_list(*group)))
@@ -25,11 +25,11 @@ fn lines() -> Vec<Line<'static>> {
         if !lines.is_empty() {
             lines.push(Line::default());
         }
-        lines.push(Line::styled(format!(" {title}"), theme::table_header()));
+        lines.push(Line::styled(format!(" {title}"), palette.table_header()));
         for (keys, label) in list {
             let pad = " ".repeat(key_width - keys.width());
             lines.push(Line::from(vec![
-                Span::styled(format!("   {keys}"), theme::hint()),
+                Span::styled(format!("   {keys}"), palette.hint()),
                 Span::raw(format!("{pad}{GAP}{label}")),
             ]));
         }
@@ -38,14 +38,14 @@ fn lines() -> Vec<Line<'static>> {
 }
 
 /// The first row that still fills `height` rows, so the list never scrolls past its end.
-pub fn last_top(height: u16) -> usize {
-    lines().len().saturating_sub(usize::from(height))
+pub fn last_top(height: u16, palette: &Palette) -> usize {
+    lines(palette).len().saturating_sub(usize::from(height))
 }
 
 /// Covers `area` with the key list, from row `top`.
-pub fn draw(frame: &mut Frame, area: Rect, top: usize) {
+pub fn draw(frame: &mut Frame, area: Rect, top: usize, palette: &Palette) {
     frame.render_widget(Clear, area);
-    frame.buffer_mut().set_style(area, theme::page());
-    let rows: Vec<Line> = lines().into_iter().skip(top).collect();
+    frame.buffer_mut().set_style(area, palette.page());
+    let rows: Vec<Line> = lines(palette).into_iter().skip(top).collect();
     frame.render_widget(Paragraph::new(rows), area);
 }

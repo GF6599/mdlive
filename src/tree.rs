@@ -10,7 +10,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::contents::fit;
-use crate::theme;
+use crate::theme::Palette;
 
 const MARKER: &str = "◀";
 const INDENT: usize = 2;
@@ -315,25 +315,32 @@ impl Tree {
 
     /// Draws the rows on view in `area`, marking `current`, the file on the page, and showing the
     /// cursor while the tree has the keys.
-    pub fn draw(&mut self, frame: &mut Frame, area: Rect, current: Option<&Path>, focused: bool) {
+    pub fn draw(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        current: Option<&Path>,
+        focused: bool,
+        palette: &Palette,
+    ) {
         let name = self.root.file_name().map_or_else(
             || self.root.display().to_string(),
             |name| name.to_string_lossy().into_owned(),
         );
         let block = Block::new()
             .borders(Borders::ALL)
-            .border_style(theme::panel_border())
+            .border_style(palette.panel_border())
             .title(Span::styled(
                 if self.typing || !self.filter.is_empty() {
                     format!(" {name} /{} ", self.filter)
                 } else {
                     format!(" {name} ")
                 },
-                theme::panel_title(),
+                palette.panel_title(),
             ));
         let inner = block.inner(area);
         frame.render_widget(Clear, area);
-        frame.render_widget(block.style(theme::page()), area);
+        frame.render_widget(block.style(palette.page()), area);
 
         let rows = self.rows();
         let height = usize::from(inner.height);
@@ -369,20 +376,20 @@ impl Tree {
                 let pad = " ".repeat(text_width.saturating_sub(lead.width() + text.width()));
                 let is_current = current.as_ref() == Some(&entry.path);
                 let mut style = match (entry.folder, is_current) {
-                    (true, _) => theme::tree_folder(),
-                    (false, true) => theme::contents_marked(),
-                    (false, false) => theme::contents_entry(1),
+                    (true, _) => palette.tree_folder(),
+                    (false, true) => palette.contents_marked(),
+                    (false, false) => palette.contents_entry(1),
                 };
-                let mut lead_style = theme::tree_folder();
+                let mut lead_style = palette.tree_folder();
                 if focused && row == self.cursor {
-                    style = style.patch(theme::tree_cursor());
-                    lead_style = lead_style.patch(theme::tree_cursor());
+                    style = style.patch(palette.tree_cursor());
+                    lead_style = lead_style.patch(palette.tree_cursor());
                 }
                 let marker = if is_current { MARKER } else { " " };
                 Line::from(vec![
                     Span::styled(lead, lead_style),
                     Span::styled(text + &pad, style),
-                    Span::styled(marker, theme::contents_marked()),
+                    Span::styled(marker, palette.contents_marked()),
                 ])
             })
             .collect();

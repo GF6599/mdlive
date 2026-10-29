@@ -34,7 +34,7 @@ fn row(buffer: &Buffer, y: u16) -> String {
 
 /// The text of the cells marked as the selected link.
 fn selected(buffer: &Buffer) -> String {
-    let colour = theme::link_selected().bg;
+    let colour = theme::ROSE_PINE.link_selected().bg;
     buffer
         .content()
         .iter()

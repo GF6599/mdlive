@@ -49,7 +49,7 @@ fn marked(buffer: &Buffer, text: &str) -> bool {
 /// The text of the row the tree cursor is on, without the marker column, while the tree has the
 /// focus.
 fn cursor(buffer: &Buffer) -> Option<String> {
-    let colour = theme::tree_cursor().bg;
+    let colour = theme::ROSE_PINE.tree_cursor().bg;
     (1..HEIGHT - 3)
         .find(|&y| Some(buffer[(1, y)].bg) == colour)
         .map(|y| cells(buffer, y, 1, 28).trim().to_string())

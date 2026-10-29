@@ -116,7 +116,7 @@ fn keeps_the_transparent_pixels_of_a_picture_where_the_terminal_draws_them() {
     for x in 1..11 {
         assert_eq!(
             (buffer[(x, 0)].fg, buffer[(x, 0)].bg),
-            (theme::BASE, theme::BASE)
+            (theme::ROSE_PINE.base, theme::ROSE_PINE.base)
         );
     }
 }
@@ -195,7 +195,7 @@ fn shows_the_alt_text_and_the_reason_for_a_picture_it_cannot_draw() {
         "{}",
         row(&buffer, 4)
     );
-    assert_eq!(buffer[(10, 0)].fg, theme::MUTED);
+    assert_eq!(buffer[(10, 0)].fg, theme::ROSE_PINE.muted);
     // And: a picture in a sentence reads as its alt text, at either end of the sentence too
     for sentence in [" see icon here", " icon first", " last icon"] {
         let y = (0..buffer.area.height)

@@ -1,14 +1,20 @@
 use pulldown_cmark::Alignment;
+use ratatui::style::Style;
 use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
 
-use crate::theme;
+use crate::theme::Palette;
 use crate::wrap::{Run, wrap_runs};
 
 pub type Cell = Vec<Run>;
 
 /// Lays out a table whose first row is its header, in a grid no wider than `width`.
-pub fn lay_out(rows: &[Vec<Cell>], alignments: &[Alignment], width: usize) -> Vec<Cell> {
+pub fn lay_out(
+    rows: &[Vec<Cell>],
+    alignments: &[Alignment],
+    width: usize,
+    palette: &Palette,
+) -> Vec<Cell> {
     let columns = rows
         .iter()
         .map(Vec::len)
@@ -32,7 +38,7 @@ pub fn lay_out(rows: &[Vec<Cell>], alignments: &[Alignment], width: usize) -> Ve
                     let cell: Cell = if index == 0 {
                         cell.iter()
                             .map(|(span, link)| {
-                                (span.clone().patch_style(theme::table_header()), *link)
+                                (span.clone().patch_style(palette.table_header()), *link)
                             })
                             .collect()
                     } else {
@@ -48,17 +54,17 @@ pub fn lay_out(rows: &[Vec<Cell>], alignments: &[Alignment], width: usize) -> Ve
         .skip(1)
         .any(|row| row.iter().any(|lines| lines.len() > 1));
 
-    let mut lines = vec![rule(&widths, '┌', '┬', '┐')];
+    let mut lines = vec![rule(&widths, '┌', '┬', '┐', palette.rule())];
     for (index, row) in wrapped.iter().enumerate() {
         if index == 1 || (index > 1 && spans_rows) {
-            lines.push(rule(&widths, '├', '┼', '┤'));
+            lines.push(rule(&widths, '├', '┼', '┤', palette.rule()));
         }
         let height = row.iter().map(Vec::len).max().unwrap_or(0).max(1);
         for line in 0..height {
-            lines.push(grid_row(row, line, &widths, alignments));
+            lines.push(grid_row(row, line, &widths, alignments, palette.rule()));
         }
     }
-    lines.push(rule(&widths, '└', '┴', '┘'));
+    lines.push(rule(&widths, '└', '┴', '┘', palette.rule()));
     lines
 }
 
@@ -97,19 +103,25 @@ fn fit(natural: &[usize], room: usize) -> Vec<usize> {
     widths
 }
 
-fn rule(widths: &[usize], left: char, join: char, right: char) -> Cell {
+fn rule(widths: &[usize], left: char, join: char, right: char, border: Style) -> Cell {
     let segments: Vec<String> = widths.iter().map(|width| "─".repeat(width + 2)).collect();
     vec![(
         Span::styled(
             format!("{left}{}{right}", segments.join(&join.to_string())),
-            theme::rule(),
+            border,
         ),
         None,
     )]
 }
 
-fn grid_row(row: &[Vec<Cell>], line: usize, widths: &[usize], alignments: &[Alignment]) -> Cell {
-    let border = || (Span::styled("│", theme::rule()), None);
+fn grid_row(
+    row: &[Vec<Cell>],
+    line: usize,
+    widths: &[usize],
+    alignments: &[Alignment],
+    border_style: Style,
+) -> Cell {
+    let border = || (Span::styled("│", border_style), None);
     let mut spans = vec![border()];
     for (column, lines) in row.iter().enumerate() {
         let content = lines.get(line).cloned().unwrap_or_default();

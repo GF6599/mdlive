@@ -6,7 +6,7 @@ use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
 use crate::keys::{Action, CANCEL, HINT_LETTERS_LISTED, Key, hints, keys_of};
-use crate::theme;
+use crate::theme::Palette;
 
 const GAP: &str = "  ";
 
@@ -176,7 +176,7 @@ fn reading_hints(reading: &Reading) -> Vec<Hint> {
 }
 
 /// Draws as many whole hints as fit in `area`, in order.
-pub fn draw(frame: &mut Frame, area: Rect, hints: &[Hint]) {
+pub fn draw(frame: &mut Frame, area: Rect, hints: &[Hint], palette: &Palette) {
     let mut spans = vec![Span::raw(" ")];
     let mut used = 1;
     for (index, hint) in hints.iter().enumerate() {
@@ -188,8 +188,8 @@ pub fn draw(frame: &mut Frame, area: Rect, hints: &[Hint]) {
         used += width;
         spans.extend([
             Span::raw(gap),
-            Span::styled(hint.keys.clone(), theme::hint()),
-            Span::styled(format!(" {}", hint.label), theme::hint_label()),
+            Span::styled(hint.keys.clone(), palette.hint()),
+            Span::styled(format!(" {}", hint.label), palette.hint_label()),
         ]);
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);

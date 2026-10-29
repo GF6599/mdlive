@@ -45,6 +45,7 @@ use crate::keys::{Command, Focus, KeyReader};
 use crate::picture_view::PictureView;
 use crate::pictures::{Pictures, pixel_size};
 use crate::search::{Match, find_all};
+use crate::theme::Palette;
 use crate::tree::{Tree, root_of};
 pub use crate::watch::{FileWatch, OpenFileWatch, watch_file};
 use crate::which_key::Popup;
@@ -155,6 +156,7 @@ pub struct Viewer {
     picture_areas: Vec<(usize, Rect)>,
     pictures: Pictures,
     diagrams: Diagrams,
+    palette: &'static Palette,
     back: Vec<Place>,
     /// The link index of the link that Enter follows.
     marked_link: Option<usize>,
@@ -198,6 +200,7 @@ impl Viewer {
             picture_areas: Vec::new(),
             pictures: Pictures::new(Path::new("."), Picker::halfblocks()),
             diagrams: Diagrams::default(),
+            palette: &theme::ROSE_PINE,
             back: Vec::new(),
             marked_link: None,
             marked_picture: None,
@@ -331,8 +334,9 @@ impl Viewer {
     }
 
     pub fn draw(&mut self, frame: &mut Frame) {
+        let palette = self.palette;
         let area = frame.area();
-        frame.buffer_mut().set_style(area, theme::page());
+        frame.buffer_mut().set_style(area, palette.page());
         let [header, body, bar, status] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Fill(1),
@@ -342,12 +346,17 @@ impl Viewer {
         .areas(area);
 
         if let Some(view) = &mut self.picture_view {
-            self.pictures.draw_view(frame, view, body);
+            self.pictures.draw_view(frame, view, body, palette);
             self.links.clear();
             self.link_areas.clear();
             self.picture_areas.clear();
-            breadcrumb::draw(frame, header, &self.title, &[]);
-            hint_bar::draw(frame, bar, &hint_bar::hints_for(&hint_bar::Mode::Picture));
+            breadcrumb::draw(frame, header, &self.title, &[], palette);
+            hint_bar::draw(
+                frame,
+                bar,
+                &hint_bar::hints_for(&hint_bar::Mode::Picture),
+                palette,
+            );
             self.draw_status(frame, status);
             return;
         }
@@ -393,7 +402,7 @@ impl Viewer {
         self.mark_selection(frame, text);
         let popup = Popup::of(&self.keys).map(|popup| (popup.area(body), popup));
         if let Some(top) = self.help_top {
-            self.help_top = Some(top.min(help::last_top(body.height)));
+            self.help_top = Some(top.min(help::last_top(body.height, palette)));
         }
         let covered = match self.help_top {
             Some(_) => Some(body),
@@ -410,30 +419,30 @@ impl Viewer {
         match (&mut self.tree, panel) {
             (Some(tree), Some(panel)) => {
                 let focused = self.keys.focus == Focus::Tree;
-                tree.draw(frame, panel, self.path.as_deref(), focused);
+                tree.draw(frame, panel, self.path.as_deref(), focused, palette);
             }
             (None, Some(panel)) => {
                 let current = self.document.heading_at(self.top);
-                contents::draw(frame, panel, self.document.headings(), current);
+                contents::draw(frame, panel, self.document.headings(), current, palette);
             }
             _ => {}
         }
         if let Some(top) = self.help_top {
-            help::draw(frame, body, top);
+            help::draw(frame, body, top, palette);
         }
         if let Some((area, popup)) = &popup {
-            popup.draw(frame, *area);
+            popup.draw(frame, *area, palette);
         }
 
         let sections =
             breadcrumb::sections(self.document.headings(), self.document.heading_at(self.top));
-        breadcrumb::draw(frame, header, &self.title, &sections);
-        hint_bar::draw(frame, bar, &hint_bar::hints_for(&self.mode()));
+        breadcrumb::draw(frame, header, &self.title, &sections, palette);
+        hint_bar::draw(frame, bar, &hint_bar::hints_for(&self.mode()), palette);
         self.draw_status(frame, status);
     }
 
     fn draw_status(&self, frame: &mut Frame, status: Rect) {
-        frame.buffer_mut().set_style(status, theme::status());
+        frame.buffer_mut().set_style(status, self.palette.status());
         let mut left = match (&self.prompt, &self.notice) {
             (Some(prompt), _) => {
                 let mark = if prompt.forward { '/' } else { '?' };
@@ -443,7 +452,7 @@ impl Viewer {
             (None, None) => vec![Span::raw(format!(" {}", self.title))],
         };
         if let Some(error) = &self.error {
-            left.push(Span::styled(format!("  {error}"), theme::error()));
+            left.push(Span::styled(format!("  {error}"), self.palette.error()));
         }
         frame.render_widget(Paragraph::new(Line::from(left)), status);
         let pending = self.keys.pending();
@@ -495,8 +504,13 @@ impl Viewer {
                 continue;
             }
             self.picture_areas.push((index, shown.intersection(text)));
-            self.pictures
-                .draw(frame, &picture.placed, text, SignedPosition { x, y });
+            self.pictures.draw(
+                frame,
+                &picture.placed,
+                text,
+                SignedPosition { x, y },
+                self.palette,
+            );
         }
     }
 
@@ -568,6 +582,7 @@ impl Viewer {
             &self.folds,
             &self.pictures,
             &self.diagrams,
+            self.palette,
         );
         self.diagrams.forget_unused();
         let placed = self
@@ -856,7 +871,10 @@ impl Viewer {
         match result {
             Ok(()) => {
                 let plural = if count == 1 { "" } else { "s" };
-                self.notice = Some((format!("copied {count} line{plural}"), theme::status()));
+                self.notice = Some((
+                    format!("copied {count} line{plural}"),
+                    self.palette.status(),
+                ));
             }
             Err(error) => self.show_error(&format!("cannot copy: {error}")),
         }
@@ -874,9 +892,9 @@ impl Viewer {
                 continue;
             };
             let style = if line == selection.cursor {
-                theme::selection_cursor()
+                self.palette.selection_cursor()
             } else {
-                theme::selection()
+                self.palette.selection()
             };
             let area = Rect {
                 y: text.y.saturating_add(row),
@@ -925,7 +943,7 @@ impl Viewer {
         let forward = search.forward != reverse;
         if matches.is_empty() {
             let notice = format!("Pattern not found: {}", search.pattern);
-            self.notice = Some((notice, theme::error()));
+            self.notice = Some((notice, self.palette.error()));
             return;
         }
         // Counted from the end of the page when going backward, so both directions step up.
@@ -949,7 +967,7 @@ impl Viewer {
             } else {
                 "search hit TOP, continuing at BOTTOM"
             };
-            self.notice = Some((notice.to_string(), theme::status()));
+            self.notice = Some((notice.to_string(), self.palette.status()));
         }
         self.current_match = Some(found);
         if found.line < self.top || found.line >= self.top + self.page {
@@ -967,9 +985,9 @@ impl Viewer {
         for mut found in find_all(shown, &search.pattern) {
             found.line += self.top;
             let style = if self.current_match == Some(found) {
-                theme::search_current()
+                self.palette.search_current()
             } else {
-                theme::search_match()
+                self.palette.search_match()
             };
             let (Ok(row), Ok(column), Ok(width)) = (
                 u16::try_from(found.line - self.top),
@@ -1343,7 +1361,7 @@ impl Viewer {
             height: 1,
         };
         frame.render_widget(
-            Paragraph::new(Span::styled(PICTURE_MARK, theme::link_selected())),
+            Paragraph::new(Span::styled(PICTURE_MARK, self.palette.link_selected())),
             at,
         );
     }
@@ -1436,7 +1454,9 @@ impl Viewer {
                 height: 1,
             }
             .intersection(text);
-            frame.buffer_mut().set_style(area, theme::link_selected());
+            frame
+                .buffer_mut()
+                .set_style(area, self.palette.link_selected());
         }
     }
 
