@@ -13,8 +13,7 @@ use crossterm::event::{
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode, window_size,
 };
-use mdlive::{Flow, LinkArea, OpenFileWatch, Viewer, folder_of, hyperlink_cells};
-use ratatui::backend::Backend;
+use mdlive::{Flow, LinkArea, OpenFileWatch, Viewer, draw_frame, folder_of};
 use ratatui_image::picker::{Picker, ProtocolType};
 
 /// Long enough to fold the writes of one editor save into one reload, short enough to feel live.
@@ -233,14 +232,7 @@ fn run(
 ) -> std::io::Result<()> {
     let mut links: Vec<LinkArea> = Vec::new();
     loop {
-        let frame = terminal.draw(|frame| viewer.draw(frame))?;
-        let cells = hyperlink_cells(frame.buffer, viewer.links(), &links);
-        if !cells.is_empty() {
-            let backend = terminal.backend_mut();
-            backend.draw(cells.iter().map(|(x, y, cell)| (*x, *y, cell)))?;
-            Backend::flush(backend)?;
-        }
-        links = viewer.links().to_vec();
+        draw_frame(terminal, &mut viewer, &mut links)?;
         let flow = loop {
             if event::poll(POLL)? {
                 match event::read()? {
