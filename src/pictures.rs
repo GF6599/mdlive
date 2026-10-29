@@ -38,6 +38,9 @@ pub struct Pictures {
     base: PathBuf,
     picker: Picker,
     loaded: HashMap<Placed, Result<SlicedProtocol, String>>,
+    /// The pixels of each picture in `loaded` at its size on the page, so that a picture can be
+    /// sent to the terminal again without a second decode.
+    pixels: HashMap<Placed, DynamicImage>,
     /// The last frame of the picture view, drawn again only when the part shown changes.
     view: Option<(Source, Window, Result<SlicedProtocol, String>)>,
     /// The pixels of the raster picture in the view, decoded once for every frame of it.
@@ -61,6 +64,7 @@ impl Pictures {
             base: PathBuf::new(),
             picker: Picker::halfblocks(),
             loaded: HashMap::new(),
+            pixels: HashMap::new(),
             view: None,
             decoded: None,
         };
@@ -77,6 +81,7 @@ impl Pictures {
         }
         self.picker = picker;
         self.loaded.clear();
+        self.pixels.clear();
         self.view = None;
     }
 
@@ -184,10 +189,11 @@ impl Pictures {
         position: SignedPosition,
     ) {
         let picker = &self.picker;
+        let pixels = &mut self.pixels;
         let loaded = self
             .loaded
             .entry(placed.clone())
-            .or_insert_with(|| load(picker, placed));
+            .or_insert_with(|| load(picker, pixels, placed));
         match loaded {
             Ok(protocol) => frame.render_widget(SlicedImage::new(protocol, position), area),
             Err(reason) => {
@@ -283,6 +289,7 @@ impl Pictures {
     pub fn keep_only<'a>(&mut self, shown: impl Iterator<Item = &'a Placed>) {
         let shown: HashSet<&Placed> = shown.collect();
         self.loaded.retain(|placed, _| shown.contains(placed));
+        self.pixels.retain(|placed, _| shown.contains(placed));
     }
 }
 
@@ -306,7 +313,25 @@ const MAX_PICTURE_PIXELS: u64 = 2048 * 2048;
 /// signed 16-bit offset.
 const MAX_ROWS: u64 = 10_000;
 
-fn load(picker: &Picker, placed: &Placed) -> Result<SlicedProtocol, String> {
+fn load(
+    picker: &Picker,
+    pixels: &mut HashMap<Placed, DynamicImage>,
+    placed: &Placed,
+) -> Result<SlicedProtocol, String> {
+    let image = match pixels.get(placed) {
+        Some(image) => image.clone(),
+        None => {
+            let image = page_pixels(picker, placed)?;
+            pixels.insert(placed.clone(), image.clone());
+            image
+        }
+    };
+    let size = Size::new(placed.columns, placed.rows);
+    SlicedProtocol::new(picker, image, Some(size)).map_err(|error| format!("cannot draw: {error}"))
+}
+
+/// The pixels of a placed picture at the size of its cells.
+fn page_pixels(picker: &Picker, placed: &Placed) -> Result<DynamicImage, String> {
     let font = picker.font_size();
     let wide = u32::from(placed.columns) * u32::from(font.width);
     let high = u32::from(placed.rows) * u32::from(font.height);
@@ -318,13 +343,11 @@ fn load(picker: &Picker, placed: &Placed) -> Result<SlicedProtocol, String> {
         }
         Source::File(path) => decode(path)?,
     };
-    let image: DynamicImage = if image.width() != wide {
+    Ok(if image.width() != wide {
         image.resize(wide, high, FilterType::Triangle)
     } else {
         image
-    };
-    let size = Size::new(placed.columns, placed.rows);
-    SlicedProtocol::new(picker, image, Some(size)).map_err(|error| format!("cannot draw: {error}"))
+    })
 }
 
 /// The size of a picture in its own pixels, from the header of a file or the size an SVG names.

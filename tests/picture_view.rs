@@ -267,6 +267,32 @@ fn sends_the_pictures_of_the_page_again_after_the_view_closes() {
     assert!(sends_a_picture(&buffer));
 }
 
+/// Closing the view sends the page pictures again from the pixels mdlive already holds, without
+/// reading their files again.
+///
+/// Why it matters: a large photo takes about 100 ms to decode, and closing the view decoded every
+/// picture of the page again, so the page stalled each time the view closed.
+#[test]
+fn sends_the_page_pictures_again_without_reading_their_files() {
+    // Given: a chart drawn through the Kitty protocol, then open on the whole page
+    let dir = tempfile::tempdir().unwrap();
+    chart(dir.path());
+    let mut viewer = kitty_viewer(dir.path());
+    draw(&mut viewer);
+    press(&mut viewer, "]p");
+    enter(&mut viewer);
+    draw(&mut viewer);
+    // And: the file of the chart is gone, so a read of it would fail
+    std::fs::remove_file(dir.path().join("chart.png")).unwrap();
+
+    // When: the reader closes the view
+    press(&mut viewer, "q");
+    let buffer = draw(&mut viewer);
+
+    // Then: the page still sends the chart
+    assert!(sends_a_picture(&buffer));
+}
+
 #[allow(deprecated)]
 fn kitty_viewer(dir: &Path) -> Viewer {
     let mut picker = Picker::from_fontsize((10, 20).into());
