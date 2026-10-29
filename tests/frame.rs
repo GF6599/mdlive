@@ -1,43 +1,20 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
-use std::cell::RefCell;
-use std::io::{self, Write};
-use std::rc::Rc;
-
 use mdlive::{Viewer, draw_frame};
-use ratatui::backend::CrosstermBackend;
-use ratatui::layout::Rect;
-use ratatui::{Terminal, TerminalOptions, Viewport};
+
+mod common;
 
 const BEGIN_SYNC: &str = "\x1b[?2026h";
 const END_SYNC: &str = "\x1b[?2026l";
 const URL: &str = "https://example.com/mdlive";
 
-/// A terminal output that the test can still read after the backend takes it.
-#[derive(Clone, Default)]
-struct Output(Rc<RefCell<Vec<u8>>>);
-
-impl Write for Output {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0.borrow_mut().write(bytes)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-/// The bytes mdlive writes to the terminal for one frame of a page with a link. A fixed viewport
-/// keeps the terminal from asking a real screen for its size.
+/// The bytes mdlive writes to the terminal for one frame of a page with a link.
 fn one_frame() -> String {
-    let output = Output::default();
-    let backend = CrosstermBackend::new(output.clone());
-    let viewport = Viewport::Fixed(Rect::new(0, 0, 40, 8));
-    let mut terminal = Terminal::with_options(backend, TerminalOptions { viewport }).unwrap();
+    let (mut terminal, output) = common::terminal(40, 8);
     let mut viewer = Viewer::new("doc.md", &format!("see [the site]({URL}) here\n"));
     let mut shown = Vec::new();
     draw_frame(&mut terminal, &mut viewer, &mut shown).unwrap();
-    String::from_utf8(output.0.take()).unwrap()
+    output.take()
 }
 
 /// A frame reaches the terminal as one synchronized update, with its link codes inside.
