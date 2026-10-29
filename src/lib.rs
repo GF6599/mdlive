@@ -24,7 +24,9 @@ mod wrap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::Style;
@@ -63,6 +65,23 @@ pub enum Flow {
     Quit,
     /// Open the editor on the file, at the source line, counted from 1.
     Edit(PathBuf, usize),
+}
+
+/// Handles each event that `next` has ready, until none is left or one leaves the page, so a burst
+/// of keys or wheel events costs one frame. `None` when `handle` used no event.
+pub fn handle_burst(
+    mut next: impl FnMut() -> std::io::Result<Option<Event>>,
+    mut handle: impl FnMut(Event) -> Option<Flow>,
+) -> std::io::Result<Option<Flow>> {
+    let mut handled = None;
+    while let Some(event) = next()? {
+        match handle(event) {
+            Some(Flow::Continue) => handled = Some(Flow::Continue),
+            Some(flow) => return Ok(Some(flow)),
+            None => {}
+        }
+    }
+    Ok(handled)
 }
 
 #[derive(Debug)]
@@ -959,6 +978,15 @@ impl Viewer {
         }
     }
 
+    /// `None` for an event the viewer does not use, such as a key release or a pointer move.
+    pub fn handle_event(&mut self, event: Event) -> Option<Flow> {
+        match event {
+            Event::Key(key) if key.kind == KeyEventKind::Press => Some(self.handle_key(key)),
+            Event::Mouse(mouse) if is_used(mouse.kind) => Some(self.handle_mouse(mouse)),
+            _ => None,
+        }
+    }
+
     /// The wheel moves what is under the pointer, the tree or the page, and a click acts on a
     /// contents entry, a tree row or a link, and gives the keys to the tree or the page it lands on.
     /// A drag over the page selects lines, and the release copies them.
@@ -1503,6 +1531,19 @@ fn scroll_help(command: Command, top: usize, half_page: usize, page: usize) -> O
         Command::End => Some(usize::MAX),
         _ => Some(top),
     }
+}
+
+/// The wheel and the left button. Every other event, such as each move of the pointer, would only
+/// cost a redraw.
+fn is_used(kind: MouseEventKind) -> bool {
+    matches!(
+        kind,
+        MouseEventKind::ScrollDown
+            | MouseEventKind::ScrollUp
+            | MouseEventKind::Down(MouseButton::Left)
+            | MouseEventKind::Drag(MouseButton::Left)
+            | MouseEventKind::Up(MouseButton::Left)
+    )
 }
 
 /// The folder that relative paths in the file at `path` start from.

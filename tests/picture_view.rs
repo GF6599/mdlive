@@ -1,10 +1,13 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
+use std::collections::VecDeque;
 use std::path::Path;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use image::{Rgb, RgbImage};
-use mdlive::Viewer;
+use mdlive::{Flow, Viewer, handle_burst};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -278,4 +281,47 @@ fn sends_a_picture(buffer: &Buffer) -> bool {
         .content()
         .iter()
         .any(|cell| cell.symbol().contains("a=T"))
+}
+
+/// A burst of wheel events that is already queued is handled in one pass, before the next frame.
+///
+/// Why it matters: each frame of the view builds and sends a screen-sized picture, so a frame per
+/// wheel event leaves the view far behind a trackpad scroll.
+#[test]
+fn handles_a_queued_burst_of_wheel_events_before_the_next_frame() {
+    // Given: the chart open and zoomed to twice the fit
+    let dir = tempfile::tempdir().unwrap();
+    chart(dir.path());
+    let mut viewer = viewer(dir.path());
+    draw(&mut viewer);
+    press(&mut viewer, "]p");
+    enter(&mut viewer);
+    press(&mut viewer, "++");
+    draw(&mut viewer);
+    // And: far more wheel events queued than the picture is tall
+    let mut queued: VecDeque<Event> = (0..20)
+        .map(|_| {
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: 20,
+                row: 5 + HEADER_ROWS,
+                modifiers: KeyModifiers::NONE,
+            })
+        })
+        .collect();
+
+    // When: mdlive handles the input that is ready
+    let flow = handle_burst(
+        || Ok(queued.pop_front()),
+        |event| viewer.handle_event(event),
+    )
+    .unwrap();
+
+    // Then: every queued event is handled
+    assert!(matches!(flow, Some(Flow::Continue)));
+    assert!(queued.is_empty());
+    // And: the one frame after it shows the bottom edge of the chart
+    let buffer = draw(&mut viewer);
+    assert!(is(&buffer, 30, 8, RED));
+    assert!(is(&buffer, 30, 1, BLUE));
 }

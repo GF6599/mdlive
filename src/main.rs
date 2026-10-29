@@ -7,13 +7,11 @@ use std::time::Duration;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use crossterm::cursor::{Hide, Show};
-use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, MouseButton, MouseEventKind,
-};
+use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode, window_size,
 };
-use mdlive::{Flow, LinkArea, OpenFileWatch, Viewer, draw_frame, folder_of};
+use mdlive::{Flow, LinkArea, OpenFileWatch, Viewer, draw_frame, folder_of, handle_burst};
 use ratatui_image::picker::{Picker, ProtocolType};
 
 /// Long enough to fold the writes of one editor save into one reload, short enough to feel live.
@@ -152,19 +150,6 @@ fn follow_open_file(viewer: &mut Viewer, watch: &mut OpenFileWatch) {
     }
 }
 
-/// The wheel and the left button. Every other event, such as each move of the pointer, would only
-/// cost a redraw.
-fn is_used(kind: MouseEventKind) -> bool {
-    matches!(
-        kind,
-        MouseEventKind::ScrollDown
-            | MouseEventKind::ScrollUp
-            | MouseEventKind::Down(MouseButton::Left)
-            | MouseEventKind::Drag(MouseButton::Left)
-            | MouseEventKind::Up(MouseButton::Left)
-    )
-}
-
 /// Asks the terminal for mouse events. The panic hook that `ratatui::init` installed restores the
 /// screen but not the mouse, so a hook in front of it gives the mouse back first, or a crash leaves
 /// the shell printing mouse codes.
@@ -234,18 +219,25 @@ fn run(
     loop {
         draw_frame(terminal, &mut viewer, &mut links)?;
         let flow = loop {
-            if event::poll(POLL)? {
-                match event::read()? {
-                    Event::Key(key) if key.kind == KeyEventKind::Press => {
-                        break viewer.handle_key(key);
-                    }
-                    Event::Mouse(mouse) if is_used(mouse.kind) => break viewer.handle_mouse(mouse),
-                    Event::Resize(..) => {
-                        follow_zoom(&mut viewer, &mut graphics);
-                        break Flow::Continue;
-                    }
-                    _ => {}
+            let mut wait = POLL;
+            let ready = || {
+                let event = if event::poll(wait)? {
+                    Some(event::read()?)
+                } else {
+                    None
+                };
+                wait = Duration::ZERO;
+                Ok(event)
+            };
+            let burst = handle_burst(ready, |event| match event {
+                Event::Resize(..) => {
+                    follow_zoom(&mut viewer, &mut graphics);
+                    Some(Flow::Continue)
                 }
+                event => viewer.handle_event(event),
+            })?;
+            if let Some(flow) = burst {
+                break flow;
             }
             if let Ok(change) = changes.try_recv() {
                 reload(&mut viewer, change);
