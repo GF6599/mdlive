@@ -7,7 +7,7 @@ use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use image::{Rgb, RgbImage};
-use mdlive::{Flow, Viewer, handle_burst};
+use mdlive::{Flow, Viewer, draw_frame, handle_burst};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -307,6 +307,129 @@ fn sends_a_picture(buffer: &Buffer) -> bool {
         .content()
         .iter()
         .any(|cell| cell.symbol().contains("a=T"))
+}
+
+/// Whether the bytes of a frame carry a Kitty escape that sends picture data.
+fn sends_picture_data(output: &str) -> bool {
+    output.contains("a=t,") || output.contains("a=T,")
+}
+
+/// The Kitty command in the bytes of a frame that places a picture the terminal holds.
+fn placement(output: &str) -> Option<&str> {
+    let start = output.find("a=p,")?;
+    let end = output[start..].find("\x1b\\")?;
+    Some(&output[start..start + end])
+}
+
+/// In a Kitty terminal, a pan in the view places another part of the picture the terminal already
+/// holds, and sends no picture data.
+///
+/// Why it matters: each pan, zoom or wheel step sent a new screen-sized picture, 32 MB for a large
+/// photo on a large screen, so the view lagged behind the reader.
+#[test]
+fn pans_a_held_picture_with_a_placement_and_no_picture_data() {
+    // Given: the chart open in a Kitty terminal and zoomed to twice the fit
+    let dir = tempfile::tempdir().unwrap();
+    chart(dir.path());
+    let mut viewer = kitty_viewer(dir.path());
+    let (mut terminal, output) = common::terminal(WIDTH, HEIGHT + HEADER_ROWS);
+    let mut links = Vec::new();
+    draw_frame(&mut terminal, &mut viewer, &mut links).unwrap();
+    press(&mut viewer, "]p");
+    enter(&mut viewer);
+    press(&mut viewer, "++");
+    draw_frame(&mut terminal, &mut viewer, &mut links).unwrap();
+    let opened = output.take();
+    assert!(sends_picture_data(&opened));
+
+    // When: the reader pans left
+    press(&mut viewer, "h");
+    draw_frame(&mut terminal, &mut viewer, &mut links).unwrap();
+    let panned = output.take();
+
+    // Then: the frame places another part of the chart and sends no picture data
+    assert!(!sends_picture_data(&panned), "{panned:?}");
+    assert!(placement(&panned).is_some(), "{panned:?}");
+    assert_ne!(placement(&panned), placement(&opened));
+}
+
+/// Closing the view in a Kitty terminal deletes the picture it held and frees its data.
+///
+/// Why it matters: a placed picture stays on the screen until mdlive deletes it, so the last frame
+/// of the view would cover the page, and the terminal would keep the data of a large photo.
+#[test]
+fn deletes_the_held_picture_when_the_view_closes() {
+    // Given: the chart open in a Kitty terminal
+    let dir = tempfile::tempdir().unwrap();
+    chart(dir.path());
+    let mut viewer = kitty_viewer(dir.path());
+    let (mut terminal, output) = common::terminal(WIDTH, HEIGHT + HEADER_ROWS);
+    let mut links = Vec::new();
+    draw_frame(&mut terminal, &mut viewer, &mut links).unwrap();
+    press(&mut viewer, "]p");
+    enter(&mut viewer);
+    draw_frame(&mut terminal, &mut viewer, &mut links).unwrap();
+    output.take();
+
+    // When: the reader closes the view
+    press(&mut viewer, "q");
+    draw_frame(&mut terminal, &mut viewer, &mut links).unwrap();
+
+    // Then: the frame deletes the picture and its data
+    let closed = output.take();
+    assert!(closed.contains("a=d,d=I,"), "{closed:?}");
+}
+
+/// After the screen is cleared, the view sends its picture to the terminal again.
+///
+/// Why it matters: ratatui clears the screen on each resize, and Ghostty then deletes each picture
+/// that no placement shows, so a view that only places the picture again stays blank after the
+/// reader zooms the terminal.
+#[test]
+fn sends_the_held_picture_again_after_the_screen_is_cleared() {
+    // Given: the chart open in a Kitty terminal, which holds its data
+    let dir = tempfile::tempdir().unwrap();
+    chart(dir.path());
+    let mut viewer = kitty_viewer(dir.path());
+    let (mut terminal, output) = common::terminal(WIDTH, HEIGHT + HEADER_ROWS);
+    let mut links = Vec::new();
+    draw_frame(&mut terminal, &mut viewer, &mut links).unwrap();
+    press(&mut viewer, "]p");
+    enter(&mut viewer);
+    draw_frame(&mut terminal, &mut viewer, &mut links).unwrap();
+    output.take();
+
+    // When: the terminal clears the screen
+    viewer.screen_cleared();
+    draw_frame(&mut terminal, &mut viewer, &mut links).unwrap();
+
+    // Then: the frame sends the chart again
+    assert!(sends_picture_data(&output.take()));
+}
+
+/// A view with no room on the screen places nothing.
+///
+/// Why it matters: Kitty reads a placement of zero cells as the natural size of the picture, so a
+/// photo would cover the whole screen of a terminal that has no rows left for the view.
+#[test]
+fn places_nothing_when_the_view_has_no_room() {
+    // Given: the chart open in a Kitty terminal
+    let dir = tempfile::tempdir().unwrap();
+    chart(dir.path());
+    let mut viewer = kitty_viewer(dir.path());
+    draw(&mut viewer);
+    press(&mut viewer, "]p");
+    enter(&mut viewer);
+    let (mut terminal, output) = common::terminal(WIDTH, 3);
+    let mut links = Vec::new();
+
+    // When: mdlive draws a frame on a screen with rows only for the breadcrumb, the hint bar and
+    // the status line
+    draw_frame(&mut terminal, &mut viewer, &mut links).unwrap();
+
+    // Then: the frame places no picture
+    let frame = output.take();
+    assert_eq!(placement(&frame), None, "{frame:?}");
 }
 
 /// A burst of wheel events that is already queued is handled in one pass, before the next frame.

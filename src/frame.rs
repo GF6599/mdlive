@@ -8,16 +8,16 @@ use ratatui::backend::{Backend, CrosstermBackend};
 use crate::Viewer;
 use crate::hyperlink::{LinkArea, hyperlink_cells};
 
-/// One synchronized update holds the frame and its link codes, so the terminal never shows a part
-/// of a frame. `shown` holds the links on screen after the last frame, so a link that left the
-/// screen loses its code.
+/// One synchronized update holds the frame, its link codes and its picture commands, so the
+/// terminal never shows a part of a frame. `shown` holds the links on screen after the last frame,
+/// so a link that left the screen loses its code.
 pub fn draw_frame<W: Write>(
     terminal: &mut Terminal<CrosstermBackend<W>>,
     viewer: &mut Viewer,
     shown: &mut Vec<LinkArea>,
 ) -> io::Result<()> {
     queue!(terminal.backend_mut(), BeginSynchronizedUpdate)?;
-    let drawn = draw_with_links(terminal, viewer, shown);
+    let drawn = draw_contents(terminal, viewer, shown);
     // A terminal left inside the update stops showing new output, so the update ends even when
     // the frame failed.
     let backend = terminal.backend_mut();
@@ -26,7 +26,7 @@ pub fn draw_frame<W: Write>(
     drawn
 }
 
-fn draw_with_links<W: Write>(
+fn draw_contents<W: Write>(
     terminal: &mut Terminal<CrosstermBackend<W>>,
     viewer: &mut Viewer,
     shown: &mut Vec<LinkArea>,
@@ -39,5 +39,9 @@ fn draw_with_links<W: Write>(
             .draw(cells.iter().map(|(x, y, cell)| (*x, *y, cell)))?;
     }
     *shown = viewer.links().to_vec();
+    let commands = viewer.take_picture_commands();
+    if !commands.is_empty() {
+        terminal.backend_mut().write_all(commands.as_bytes())?;
+    }
     Ok(())
 }

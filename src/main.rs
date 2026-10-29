@@ -231,6 +231,7 @@ fn run(
             };
             let burst = handle_burst(ready, |event| match event {
                 Event::Resize(..) => {
+                    viewer.screen_cleared();
                     follow_zoom(&mut viewer, &mut graphics);
                     Some(Flow::Continue)
                 }

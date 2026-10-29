@@ -3,13 +3,15 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use image::imageops::FilterType;
 use image::{DynamicImage, ImageReader, Rgba};
 use ratatui::Frame;
 use ratatui::layout::{Rect, Size};
 use ratatui::style::Color;
 use ratatui::text::Span;
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Clear, Paragraph};
 use ratatui_image::picker::{Picker, ProtocolType};
 use ratatui_image::sliced::{SignedPosition, SlicedImage, SlicedProtocol};
 use resvg::tiny_skia::{Pixmap, Transform};
@@ -33,6 +35,13 @@ pub enum Source {
     Svg(Arc<str>),
 }
 
+/// The raster picture the terminal holds for the view.
+struct Held {
+    path: PathBuf,
+    /// The size of the picture in pixels, or why it cannot be sent.
+    sent: Result<(u32, u32), String>,
+}
+
 /// Where the pictures of a page come from, and how the terminal draws them.
 pub struct Pictures {
     base: PathBuf,
@@ -45,6 +54,10 @@ pub struct Pictures {
     view: Option<(Source, Window, Result<SlicedProtocol, String>)>,
     /// The pixels of the raster picture in the view, decoded once for every frame of it.
     decoded: Option<(PathBuf, DynamicImage)>,
+    held: Option<Held>,
+    /// The Kitty commands for the picture the terminal holds, which go out after the cells of the
+    /// next frame.
+    commands: String,
 }
 
 impl fmt::Debug for Pictures {
@@ -67,6 +80,8 @@ impl Pictures {
             pixels: HashMap::new(),
             view: None,
             decoded: None,
+            held: None,
+            commands: String::new(),
         };
         pictures.set_base(base);
         pictures.set_picker(picker);
@@ -221,6 +236,30 @@ impl Pictures {
     pub fn draw_view(&mut self, frame: &mut Frame, view: &mut PictureView, area: Rect) {
         let font = self.picker.font_size();
         let window = view.frame(area.width, area.height, (font.width, font.height));
+        let shown = Rect {
+            x: area.x + area.width.saturating_sub(window.columns) / 2,
+            y: area.y + area.height.saturating_sub(window.rows) / 2,
+            width: window.columns,
+            height: window.rows,
+        }
+        .intersection(area);
+        // Kitty reads a placement of no cells as the natural size of the picture.
+        if shown.is_empty() {
+            return;
+        }
+        if let Some(path) = self.placed_directly(&view.source) {
+            match self.hold(&path) {
+                Ok(size) => {
+                    frame.render_widget(Clear, shown);
+                    self.commands.push_str(&place(size, &window, shown));
+                }
+                Err(reason) => frame.render_widget(
+                    Paragraph::new(Span::styled(reason, theme::picture_note())),
+                    area,
+                ),
+            }
+            return;
+        }
         let current = self
             .view
             .as_ref()
@@ -232,13 +271,6 @@ impl Pictures {
         let Some((_, _, drawn)) = &mut self.view else {
             return;
         };
-        let shown = Rect {
-            x: area.x + area.width.saturating_sub(window.columns) / 2,
-            y: area.y + area.height.saturating_sub(window.rows) / 2,
-            width: window.columns,
-            height: window.rows,
-        }
-        .intersection(area);
         match drawn {
             Ok(protocol) => frame.render_widget(
                 SlicedImage::new(protocol, SignedPosition { x: 0, y: 0 }),
@@ -257,6 +289,51 @@ impl Pictures {
         self.view = None;
         self.decoded = None;
         self.loaded.clear();
+        if let Some(Held { sent: Ok(_), .. }) = self.held.take() {
+            self.commands
+                .push_str(&kitty(&format!("a=d,d=I,i={VIEW_IMAGE},q=2"), ""));
+        }
+    }
+
+    /// A cleared screen loses the placement of the view, and the terminal may then drop the data
+    /// of its picture, so the next frame sends the picture again.
+    pub fn screen_cleared(&mut self) {
+        self.held = None;
+    }
+
+    pub fn take_commands(&mut self) -> String {
+        std::mem::take(&mut self.commands)
+    }
+
+    /// The file of a raster picture that the view places directly from the data the terminal
+    /// holds. An SVG is drawn again at each zoom so that it stays sharp. tmux cannot put a direct
+    /// placement at its own cursor, so inside it the view sends each frame as a new picture.
+    fn placed_directly(&self, source: &Source) -> Option<PathBuf> {
+        let kitty = self.picker.protocol_type() == ProtocolType::Kitty;
+        match source {
+            Source::File(path) if kitty && !self.picker.tmux_detected() && !is_svg(path) => {
+                Some(path.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// Sends the picture at `path` to the terminal, unless the terminal holds it already.
+    fn hold(&mut self, path: &Path) -> Result<(u32, u32), String> {
+        if let Some(held) = &self.held
+            && held.path == path
+        {
+            return held.sent.clone();
+        }
+        let sent = decode(path).map(|image| {
+            self.commands.push_str(&transmit(&image));
+            (image.width(), image.height())
+        });
+        self.held = Some(Held {
+            path: path.to_path_buf(),
+            sent: sent.clone(),
+        });
+        sent
     }
 
     fn draw_window(&mut self, source: &Source, window: &Window) -> Result<SlicedProtocol, String> {
@@ -379,14 +456,75 @@ fn decode(path: &Path) -> Result<DynamicImage, String> {
 
 /// The part of `image` that `window` shows, at the pixels the frame draws.
 fn crop_window(image: &DynamicImage, window: &Window) -> DynamicImage {
-    let x = (window.x.floor() as u32).min(image.width().saturating_sub(1));
-    let y = (window.y.floor() as u32).min(image.height().saturating_sub(1));
-    let wide = ((window.x + window.wide).ceil() as u32).clamp(x + 1, image.width()) - x;
-    let high = ((window.y + window.high).ceil() as u32).clamp(y + 1, image.height()) - y;
+    let (x, y, wide, high) = source_rect((image.width(), image.height()), window);
     image.crop_imm(x, y, wide, high).resize_exact(
         window.pixels_wide,
         window.pixels_high,
         FilterType::Triangle,
+    )
+}
+
+/// The whole pixels of a picture of `size` that `window` shows: the left, the top, the width and
+/// the height.
+fn source_rect((width, height): (u32, u32), window: &Window) -> (u32, u32, u32, u32) {
+    let x = (window.x.floor() as u32).min(width.saturating_sub(1));
+    let y = (window.y.floor() as u32).min(height.saturating_sub(1));
+    let wide = ((window.x + window.wide).ceil() as u32).clamp(x + 1, width) - x;
+    let high = ((window.y + window.high).ceil() as u32).clamp(y + 1, height) - y;
+    (x, y, wide, high)
+}
+
+/// The Kitty image id of the picture the view holds. ratatui-image picks a random id for each
+/// picture of the page, so a fixed id meets one of them with a chance of one in four billion.
+const VIEW_IMAGE: u32 = 0x00ED_1A0F;
+/// The terminal replaces a placement that has the id of an earlier one, so each frame of the view
+/// takes the place of the frame before it.
+const VIEW_PLACEMENT: u32 = 1;
+/// The protocol takes at most 4096 bytes of base64 in one escape.
+const CHUNK: usize = 4096 / 4 * 3;
+
+fn kitty(control: &str, payload: &str) -> String {
+    format!("\x1b_G{control};{payload}\x1b\\")
+}
+
+/// A picture with no alpha goes as RGB, a quarter fewer bytes than RGBA.
+fn transmit(image: &DynamicImage) -> String {
+    let (format, bytes) = if image.color().has_alpha() {
+        (32, image.to_rgba8().into_raw())
+    } else {
+        (24, image.to_rgb8().into_raw())
+    };
+    let chunks: Vec<&[u8]> = bytes.chunks(CHUNK).collect();
+    let mut escapes = String::with_capacity(bytes.len() / 3 * 4 + chunks.len() * 16 + 64);
+    for (index, chunk) in chunks.iter().enumerate() {
+        let more = u8::from(index + 1 < chunks.len());
+        let control = if index == 0 {
+            format!(
+                "a=t,f={format},s={},v={},i={VIEW_IMAGE},q=2,m={more}",
+                image.width(),
+                image.height()
+            )
+        } else {
+            format!("m={more}")
+        };
+        escapes.push_str(&kitty(&control, &STANDARD.encode(chunk)));
+    }
+    escapes
+}
+
+/// The escapes that show the part `window` of the held picture of `size` on the cells of `shown`.
+/// `C=1` keeps the cursor still, because a cursor moved below the last row scrolls the screen.
+fn place(size: (u32, u32), window: &Window, shown: Rect) -> String {
+    let (x, y, wide, high) = source_rect(size, window);
+    let control = format!(
+        "a=p,i={VIEW_IMAGE},p={VIEW_PLACEMENT},x={x},y={y},w={wide},h={high},c={},r={},C=1,q=2",
+        shown.width, shown.height
+    );
+    format!(
+        "\x1b[{};{}H{}",
+        shown.y + 1,
+        shown.x + 1,
+        kitty(&control, "")
     )
 }
 
