@@ -70,7 +70,7 @@ mdlive reads `~/.config/mdlive/config.toml`, or `$XDG_CONFIG_HOME/mdlive/config.
 theme = "rose-pine"
 ```
 
-`rose-pine` is the default and the only theme. The page shows the terminal's own background, so a terminal with opacity or a background picture shows through. A file with an unknown theme, an unknown key or a typo stops mdlive at startup with a message that names the problem.
+The themes are `rose-pine`, which is the default, `catppuccin-mocha`, `tokyo-night`, `gruvbox-dark` and `nord`. The page shows the terminal's own background, so a terminal with opacity or a background picture shows through. A file with an unknown theme, an unknown key or a typo stops mdlive at startup with a message that names the problem.
 
 ## Development
 
