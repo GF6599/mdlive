@@ -2,6 +2,9 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use mdlive::{Viewer, find_ffmpeg};
 use ratatui::Terminal;
@@ -182,4 +185,105 @@ fn refuses_a_video_that_is_an_ffmpeg_script() {
     assert!(!shows_red(&page));
     let line = row(&page, PICTURE_ROW);
     assert!(line.contains("script (ffmpeg cannot read"), "{line:?}");
+}
+
+/// The delay of each frame of a video in the view, which ffmpeg sends at 25 frames a second.
+const FRAME: Duration = Duration::from_millis(40);
+
+/// A viewer with the red and blue video open in the picture view.
+pub fn playing(dir: &Path) -> Option<Viewer> {
+    common::red_then_blue_clip(dir)?;
+    let mut viewer = viewer(dir, "intro\n\n![clip](clip.mkv)\n\nafter\n");
+    draw(&mut viewer);
+    for key in "]p".chars() {
+        viewer.handle_key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE));
+    }
+    viewer.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    Some(viewer)
+}
+
+fn press(viewer: &mut Viewer, key: char) {
+    viewer.handle_key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE));
+}
+
+/// The colour of the middle of the view, the nearest of red and blue.
+fn view_colour(viewer: &mut Viewer) -> &'static str {
+    match draw(viewer)[(WIDTH / 2, HEIGHT / 2 - 1)].bg {
+        Color::Rgb(r, _, b) if r > 200 && b < 50 => "red",
+        Color::Rgb(r, _, b) if b > 200 && r < 50 => "blue",
+        other => panic!("the middle of the view is {other:?}"),
+    }
+}
+
+/// The picture view plays a video frame by frame at 25 frames a second, and starts it again after
+/// its last frame.
+///
+/// Why it matters: a page that embeds a recording showed only its first frame, so the reader
+/// could not watch it in mdlive.
+#[test]
+fn plays_the_frames_of_a_video_in_turn() {
+    // Given: the red and blue video open in the view, on its first frame
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut viewer) = playing(dir.path()) else {
+        return;
+    };
+    assert_eq!(view_colour(&mut viewer), "red");
+    assert_eq!(viewer.until_next_frame(), Some(FRAME));
+
+    // When: four frames pass
+    for _ in 0..4 {
+        assert!(viewer.play(FRAME));
+    }
+
+    // Then: the red part still shows
+    assert_eq!(view_colour(&mut viewer), "red");
+
+    // When: eight more frames pass, past the end of the red 0.4 s
+    for _ in 0..8 {
+        assert!(viewer.play(FRAME));
+    }
+
+    // Then: the blue part shows
+    assert_eq!(view_colour(&mut viewer), "blue");
+
+    // When: frames pass until red shows again
+    let mut played = 12;
+    while view_colour(&mut viewer) == "blue" && played < 400 {
+        viewer.play(FRAME);
+        played += 1;
+    }
+
+    // Then: red shows again only after the whole 10.4 s of the video, from its first frame
+    assert_eq!(view_colour(&mut viewer), "red");
+    assert!(played > 250, "red again after {played} frames");
+}
+
+/// Space pauses a video on its frame, and Space again plays it on from there.
+///
+/// Why it matters: a reader who wants to read one frame of a recording must stop it there.
+#[test]
+fn pauses_and_plays_a_video_with_space() {
+    // Given: the red and blue video playing in the view
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut viewer) = playing(dir.path()) else {
+        return;
+    };
+
+    // When: the reader pauses and a second passes
+    press(&mut viewer, ' ');
+    let shown = viewer.play(Duration::from_secs(1));
+
+    // Then: no frame is due and the red frame stays
+    assert!(!shown);
+    assert_eq!(viewer.until_next_frame(), None);
+    assert_eq!(view_colour(&mut viewer), "red");
+
+    // When: the reader plays it again and twelve frames pass
+    press(&mut viewer, ' ');
+    for _ in 0..12 {
+        viewer.play(FRAME);
+    }
+
+    // Then: the blue part shows
+    assert_eq!(view_colour(&mut viewer), "blue");
 }
