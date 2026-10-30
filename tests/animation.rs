@@ -208,6 +208,33 @@ fn stops_the_gif_when_the_view_closes() {
     assert!(!viewer.play(DELAY));
 }
 
+/// A GIF whose frames need more memory than mdlive lets one picture take is not played, and the
+/// status line says why.
+///
+/// Why it matters: a GIF header can name a canvas of 65535 by 65535 pixels in a few bytes, and
+/// each frame of it is 17 GB, so a small file could take all the memory of the machine.
+#[test]
+fn refuses_to_play_a_gif_whose_frames_pass_the_memory_limit() {
+    // Given: a GIF of two 40 by 20 frames on a canvas of 11600 by 11600 pixels, 538 MB as RGBA,
+    // just past the 512 MiB limit
+    let dir = tempfile::tempdir().unwrap();
+    gif(dir.path(), "large.gif", &[RED, BLUE]);
+    let path = dir.path().join("large.gif");
+    let mut bytes = std::fs::read(&path).unwrap();
+    let side = 11_600_u16.to_le_bytes();
+    bytes[6..10].copy_from_slice(&[side[0], side[1], side[0], side[1]]);
+    std::fs::write(&path, bytes).unwrap();
+    let mut viewer = viewer(dir.path(), "large.gif", ProtocolType::Halfblocks);
+
+    // When: the reader opens it in the view
+    open_first_picture(&mut viewer);
+
+    // Then: no frame is due, and the status line says the GIF cannot be read
+    assert_eq!(viewer.until_next_frame(), None);
+    let status = row(&draw(&mut viewer), HEIGHT - 1);
+    assert!(status.contains("cannot read"), "{status:?}");
+}
+
 /// The value of `key` in the first Kitty command of `output` that holds `action`.
 fn kitty_value<'a>(output: &'a str, action: &str, key: &str) -> Option<(usize, &'a str)> {
     let start = output.find(action)?;
