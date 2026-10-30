@@ -1,4 +1,3 @@
-use std::fmt;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -31,17 +30,6 @@ pub struct Animation {
     number: u64,
     time_left: Duration,
     paused: bool,
-}
-
-impl fmt::Debug for Animation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Animation")
-            .field("path", &self.path)
-            .field("number", &self.number)
-            .field("time_left", &self.time_left)
-            .field("paused", &self.paused)
-            .finish()
-    }
 }
 
 impl Animation {
