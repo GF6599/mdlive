@@ -19,6 +19,7 @@ mod search;
 mod table;
 pub mod theme;
 mod tree;
+mod video;
 mod watch;
 mod which_key;
 mod wrap;
@@ -46,10 +47,11 @@ use crate::hyperlink::is_openable;
 pub use crate::hyperlink::{LinkArea, hyperlink_cells};
 use crate::keys::{Command, Focus, KeyReader};
 use crate::picture_view::PictureView;
-use crate::pictures::{Pictures, pixel_size};
+use crate::pictures::Pictures;
 use crate::search::{Match, find_all};
 use crate::theme::Palette;
 use crate::tree::{Tree, root_of};
+pub use crate::video::find_ffmpeg;
 pub use crate::watch::{FileWatch, OpenFileWatch, watch_file};
 use crate::which_key::Popup;
 
@@ -332,6 +334,14 @@ impl Viewer {
     #[must_use]
     pub fn with_images(mut self, base: &Path, picker: Picker) -> Self {
         self.pictures = Pictures::new(base, picker);
+        self
+    }
+
+    /// Reads video through `ffmpeg`, or reads none when it is `None`. mdlive finds ffmpeg on `PATH`
+    /// by itself, so this is for a caller that must choose, as a test of a reader without it does.
+    #[must_use]
+    pub fn with_ffmpeg(mut self, ffmpeg: Option<PathBuf>) -> Self {
+        self.pictures.set_ffmpeg(ffmpeg);
         self
     }
 
@@ -1331,7 +1341,7 @@ impl Viewer {
         else {
             return;
         };
-        match pixel_size(&source) {
+        match self.pictures.pixel_size(&source) {
             Ok(size) => {
                 if let Err(reason) = self.pictures.open_view(&source) {
                     self.show_error(&reason);

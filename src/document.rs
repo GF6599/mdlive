@@ -730,6 +730,9 @@ impl<'a> Builder<'a> {
             Block::Text { base, .. } if let Some((url, alt)) = lone_picture => {
                 self.push_picture(&url, &alt, base, width, line);
             }
+            Block::Text { spans, base } if let Some(url) = video_paragraph(&spans) => {
+                self.push_picture(&url, &url, base, width, line);
+            }
             Block::Text { spans, .. } => self.push_wrapped(&spans, width, line),
             Block::Heading { spans, level } => {
                 self.document.headings.push(Heading {
@@ -756,6 +759,9 @@ impl<'a> Builder<'a> {
                 {
                     self.push_runs(row, index == 0, line);
                 }
+            }
+            Block::Raw { text } if let Some(url) = video_source(&text) => {
+                self.push_picture(&url, &url, self.palette.page(), width, line);
             }
             Block::Raw { text } => self.push_source(&text, width, line),
             Block::FrontMatter { text } => match front_matter::parse(&text) {
@@ -1100,6 +1106,48 @@ fn fence_language(info: &str) -> &str {
 fn is_comment(html: &str) -> bool {
     let html = html.trim();
     html.starts_with("<!--") && html.ends_with("-->")
+}
+
+/// The address of the video in a paragraph that is one video element on one line. Only a paragraph
+/// that opens with a video tag is joined, because every paragraph comes here at each layout.
+fn video_paragraph(spans: &[Run]) -> Option<String> {
+    let (first, _) = spans.first()?;
+    let opens = first.content.trim_start().as_bytes();
+    if !opens
+        .get(.."<video".len())
+        .is_some_and(|tag| tag.eq_ignore_ascii_case(b"<video"))
+    {
+        return None;
+    }
+    video_source(
+        &spans
+            .iter()
+            .map(|(span, _)| span.content.as_ref())
+            .collect::<String>(),
+    )
+}
+
+/// The address of the video in HTML that is one whole video element, from the `src` of the video
+/// tag or of the first `source` tag inside it. CommonMark makes a video element on one line a
+/// paragraph of inline HTML, and one over several lines a block of HTML, so both come here. The
+/// lowercase copy keeps the byte offsets of the HTML, so the address keeps its own case.
+fn video_source(html: &str) -> Option<String> {
+    let lower = html.to_ascii_lowercase();
+    let element = lower.trim();
+    if !element.starts_with("<video") || !element.ends_with("</video>") {
+        return None;
+    }
+    let (at, _) = lower
+        .match_indices("src=")
+        .find(|&(at, _)| lower[..at].ends_with(char::is_whitespace))?;
+    let value = &html[at + "src=".len()..];
+    let address = match value.chars().next()? {
+        quote @ ('"' | '\'') => value[1..].split(quote).next()?,
+        _ => value
+            .split(|c: char| c.is_whitespace() || c == '>')
+            .next()?,
+    };
+    (!address.is_empty()).then(|| address.to_string())
 }
 
 fn heading_level(level: HeadingLevel) -> u8 {
