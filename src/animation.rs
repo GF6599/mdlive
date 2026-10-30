@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use image::codecs::gif::GifDecoder;
-use image::{AnimationDecoder, DynamicImage, Frame, Frames, ImageFormat, ImageReader};
+use image::{
+    AnimationDecoder, DynamicImage, Frame, Frames, ImageDecoder, ImageFormat, ImageReader, Limits,
+};
 
 /// Browsers show a GIF frame that asks for less than 20 ms for 100 ms, and GIF makers write such
 /// delays for that, so mdlive does the same.
@@ -131,11 +133,16 @@ impl Animation {
     }
 }
 
+/// The decoder takes the limits that `ImageReader` gives every other picture, because `GifDecoder`
+/// on its own has none, and a GIF header can name a canvas of 17 GB a frame in a few bytes.
 fn frames(path: &Path) -> Result<Frames<'static>, String> {
     let file = File::open(path).map_err(|error| format!("cannot read: {error}"))?;
-    GifDecoder::new(BufReader::new(file))
-        .map(AnimationDecoder::into_frames)
-        .map_err(|error| format!("cannot read: {error}"))
+    let mut decoder =
+        GifDecoder::new(BufReader::new(file)).map_err(|error| format!("cannot read: {error}"))?;
+    decoder
+        .set_limits(Limits::default())
+        .map_err(|error| format!("cannot read: {error}"))?;
+    Ok(decoder.into_frames())
 }
 
 fn next_frame(frames: &mut Frames<'static>) -> Result<Option<Frame>, String> {
