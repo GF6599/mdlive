@@ -1,9 +1,10 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -24,6 +25,7 @@ use resvg::usvg;
 use crate::animation::{Animation, Playback};
 use crate::picture_view::{PictureView, Window};
 use crate::theme::Palette;
+use crate::video;
 
 /// A picture sized to fit the text, in cells.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -51,6 +53,10 @@ struct Held {
     sent: Result<(u32, u32), String>,
 }
 
+/// The size of each video by its path and the time it was last written, because the page is laid
+/// out again on each fold, resize and panel, and each answer costs a run of ffmpeg.
+type VideoSizes = HashMap<(PathBuf, SystemTime), Result<(u32, u32), String>>;
+
 /// Where the pictures of a page come from, and how the terminal draws them.
 pub struct Pictures {
     base: PathBuf,
@@ -69,6 +75,8 @@ pub struct Pictures {
     /// The Kitty commands for the picture the terminal holds, which go out after the cells of the
     /// next frame.
     commands: String,
+    ffmpeg: Option<PathBuf>,
+    video_sizes: RefCell<VideoSizes>,
 }
 
 impl fmt::Debug for Pictures {
@@ -94,6 +102,8 @@ impl Pictures {
             animation: None,
             held: None,
             commands: String::new(),
+            ffmpeg: video::find_ffmpeg(),
+            video_sizes: RefCell::new(HashMap::new()),
         };
         pictures.set_base(base);
         pictures.set_picker(picker);
@@ -107,6 +117,10 @@ impl Pictures {
         self.loaded.clear();
         self.pixels.clear();
         self.view = None;
+    }
+
+    pub fn set_ffmpeg(&mut self, ffmpeg: Option<PathBuf>) {
+        self.ffmpeg = ffmpeg;
     }
 
     /// Reads relative paths from `base` from now on.
@@ -125,14 +139,14 @@ impl Pictures {
             .resolve(url)
             .ok_or_else(|| format!("not found: {url}"))?;
         let source = Source::File(path);
-        let (pixels_wide, pixels_high) = pixel_size(&source)?;
+        let (pixels_wide, pixels_high) = self.pixel_size(&source)?;
         Ok(self.fit(source, pixels_wide, pixels_high, width))
     }
 
     /// Sizes an SVG held in memory to fit `width` columns.
     pub fn place_svg(&self, svg: Arc<str>, width: usize) -> Result<Placed, String> {
         let source = Source::Svg(svg);
-        let (pixels_wide, pixels_high) = pixel_size(&source)?;
+        let (pixels_wide, pixels_high) = self.pixel_size(&source)?;
         Ok(self.fit(source, pixels_wide, pixels_high, width))
     }
 
@@ -214,11 +228,12 @@ impl Pictures {
         palette: &Palette,
     ) {
         let picker = &self.picker;
+        let ffmpeg = self.ffmpeg.as_deref();
         let pixels = &mut self.pixels;
         let loaded = self
             .loaded
             .entry(placed.clone())
-            .or_insert_with(|| load(picker, pixels, placed, palette));
+            .or_insert_with(|| load(picker, ffmpeg, pixels, placed, palette));
         match loaded {
             Ok(protocol) => frame.render_widget(SlicedImage::new(protocol, position), area),
             Err(reason) => {
@@ -404,7 +419,7 @@ impl Pictures {
         let pixels = match &self.animation {
             Some(animation) => Ok(animation.frame().1),
             None => {
-                decoded = decode(path);
+                decoded = decode(path, self.ffmpeg.as_deref());
                 decoded.as_ref().map_err(String::clone)
             }
         };
@@ -442,7 +457,7 @@ impl Pictures {
                     .as_ref()
                     .is_none_or(|(decoded, _)| decoded != path)
                 {
-                    self.decoded = Some((path.clone(), decode(path)?));
+                    self.decoded = Some((path.clone(), decode(path, self.ffmpeg.as_deref())?));
                 }
                 let Some((_, image)) = &self.decoded else {
                     return Err("cannot read the picture".to_string());
@@ -456,6 +471,28 @@ impl Pictures {
             Size::new(window.columns, window.rows),
             palette,
         )
+    }
+
+    /// The size of a picture in its own pixels. A video has no header that image readers know, so
+    /// its size is the size of its first frame.
+    pub fn pixel_size(&self, source: &Source) -> Result<(u32, u32), String> {
+        let Source::File(path) = source else {
+            return stated_size(source);
+        };
+        if !video::is_video(path) {
+            return stated_size(source);
+        }
+        let written = std::fs::metadata(path)
+            .and_then(|file| file.modified())
+            .map_err(|error| format!("cannot read: {error}"))?;
+        let key = (path.clone(), written);
+        if let Some(size) = self.video_sizes.borrow().get(&key) {
+            return size.clone();
+        }
+        let size = video::first_frame(self.ffmpeg.as_deref(), path)
+            .map(|frame| (frame.width(), frame.height()));
+        self.video_sizes.borrow_mut().insert(key, size.clone());
+        size
     }
 
     /// Forgets the pictures a page no longer shows at these sizes.
@@ -488,6 +525,7 @@ const MAX_ROWS: u64 = 10_000;
 
 fn load(
     picker: &Picker,
+    ffmpeg: Option<&Path>,
     pixels: &mut HashMap<Placed, DynamicImage>,
     placed: &Placed,
     palette: &Palette,
@@ -495,7 +533,7 @@ fn load(
     let image = match pixels.get(placed) {
         Some(image) => image.clone(),
         None => {
-            let image = page_pixels(picker, placed)?;
+            let image = page_pixels(picker, ffmpeg, placed)?;
             pixels.insert(placed.clone(), image.clone());
             image
         }
@@ -535,7 +573,11 @@ fn on_page_colour(image: &DynamicImage, colour: Color) -> DynamicImage {
 }
 
 /// The pixels of a placed picture at the size of its cells.
-fn page_pixels(picker: &Picker, placed: &Placed) -> Result<DynamicImage, String> {
+fn page_pixels(
+    picker: &Picker,
+    ffmpeg: Option<&Path>,
+    placed: &Placed,
+) -> Result<DynamicImage, String> {
     let font = picker.font_size();
     let wide = u32::from(placed.columns) * u32::from(font.width);
     let high = u32::from(placed.rows) * u32::from(font.height);
@@ -545,7 +587,7 @@ fn page_pixels(picker: &Picker, placed: &Placed) -> Result<DynamicImage, String>
             let data = std::fs::read(path).map_err(|error| format!("cannot read: {error}"))?;
             draw_svg(&data, path.parent(), wide, high)?
         }
-        Source::File(path) => decode(path)?,
+        Source::File(path) => decode(path, ffmpeg)?,
     };
     Ok(if image.width() != wide {
         image.resize(wide, high, FilterType::Triangle)
@@ -555,7 +597,7 @@ fn page_pixels(picker: &Picker, placed: &Placed) -> Result<DynamicImage, String>
 }
 
 /// The size of a picture in its own pixels, from the header of a file or the size an SVG names.
-pub fn pixel_size(source: &Source) -> Result<(u32, u32), String> {
+fn stated_size(source: &Source) -> Result<(u32, u32), String> {
     match source {
         Source::Svg(svg) => Ok(svg_size(&parse_svg(
             svg.as_bytes(),
@@ -573,7 +615,10 @@ pub fn pixel_size(source: &Source) -> Result<(u32, u32), String> {
     }
 }
 
-fn decode(path: &Path) -> Result<DynamicImage, String> {
+fn decode(path: &Path, ffmpeg: Option<&Path>) -> Result<DynamicImage, String> {
+    if video::is_video(path) {
+        return video::first_frame(ffmpeg, path);
+    }
     ImageReader::open(path)
         .and_then(ImageReader::with_guessed_format)
         .map_err(|error| error.to_string())
