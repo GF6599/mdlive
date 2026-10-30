@@ -154,3 +154,32 @@ fn says_that_ffmpeg_is_missing_where_a_video_would_show() {
     let line = row(&page, PICTURE_ROW);
     assert!(line.contains("clip (ffmpeg not found)"), "{line:?}");
 }
+
+/// A file named as a video that is really an ffmpeg script, which names another file to read,
+/// shows as a video that cannot be read.
+///
+/// Why it matters: ffmpeg picks how to read a file from what the file holds, not from its name,
+/// and a concat script or a playlist makes ffmpeg open other files or addresses, while the README
+/// says that opening a page makes no network call.
+#[test]
+fn refuses_a_video_that_is_an_ffmpeg_script() {
+    // Given: a red video, and a page that links a concat script named as a video, which names it
+    let dir = tempfile::tempdir().unwrap();
+    if red_clip(dir.path(), "red.mkv").is_none() {
+        return;
+    }
+    std::fs::write(
+        dir.path().join("script.mp4"),
+        "ffconcat version 1.0\nfile red.mkv\n",
+    )
+    .unwrap();
+    let mut viewer = viewer(dir.path(), "intro\n\n![script](script.mp4)\n\nafter\n");
+
+    // When: mdlive draws the page
+    let page = draw(&mut viewer);
+
+    // Then: the page shows no frame of the red video, and says ffmpeg cannot read the file
+    assert!(!shows_red(&page));
+    let line = row(&page, PICTURE_ROW);
+    assert!(line.contains("script (ffmpeg cannot read"), "{line:?}");
+}

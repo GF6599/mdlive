@@ -36,7 +36,11 @@ pub fn first_frame(ffmpeg: Option<&Path>, path: &Path) -> Result<DynamicImage, S
     let mut input = OsString::from("file:");
     input.push(path);
     let output = Command::new(ffmpeg)
-        .args(["-nostdin", "-v", "error", "-i"])
+        .args(["-nostdin", "-v", "error"])
+        // ffmpeg picks a reader from what a file holds, and a concat script or a playlist named
+        // `.mp4` makes it open other files or addresses. These two limits keep it to the readers
+        // of the four extensions, and to local files.
+        .args(["-protocol_whitelist", "file", "-format_whitelist", "mov,matroska", "-i"])
         .arg(input)
         .args(["-frames:v", "1", "-f", "image2pipe", "-c:v", "png", "-"])
         .stdin(Stdio::null())
