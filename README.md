@@ -39,7 +39,7 @@ The bar at the bottom names the keys for what you are doing, and `g?` lists ever
 | `-` | Open the file tree: every Markdown file of the git repository, or of the file's folder outside one |
 | `/`, `n` / `N` | Search, then the next or previous match |
 | `]l`, `Enter` | Mark the next link, then follow it. `C-o` goes back |
-| `]p`, `Enter` | Mark the next picture, then open it on the whole screen. There `+` / `-` zoom, `h` `j` `k` `l` pan, `0` fits it again, `Space` pauses or plays a GIF and `q` closes it |
+| `]p`, `Enter` | Mark the next picture, then open it on the whole screen. There `+` / `-` zoom, `h` `j` `k` `l` pan, `0` fits it again, `Space` pauses or plays a GIF or a video and `q` closes it |
 | `za` | Open or close a fold, a `<details>` block |
 | `V`, `y` | Select whole lines, then copy their Markdown source |
 | `E` | Edit the file at the line at the top of the screen, in `$VISUAL` or `$EDITOR` |
@@ -55,7 +55,7 @@ The mouse works too: the wheel scrolls, a click picks a contents entry, a tree r
 - **Maths.** `$…$` and `$$…$$` show as Unicode text. A matrix or a `cases` block takes one row per line, with its columns aligned.
 - **Diagrams.** A Mermaid block shows as a picture in a terminal that draws pictures, and as box text in one that does not.
 - **Pictures.** A terminal with the Kitty, iTerm2 or Sixel picture protocol, such as Ghostty, kitty, WezTerm or iTerm2, draws them in full. Other terminals draw them in half blocks. A picture from the web is never fetched, so opening a page makes no network call.
-- **GIFs and videos.** An animated GIF plays when you open it on the whole screen. A video file, `.mp4`, `.webm`, `.mov` or `.mkv`, linked as a picture or named in a `<video>` tag, shows its first frame. Video needs `ffmpeg` on your `PATH`, and the Homebrew cask does not install it, so run `brew install ffmpeg` for it. Without `ffmpeg`, the page shows the name of the video and says so.
+- **GIFs and videos.** A video file, `.mp4`, `.webm`, `.mov` or `.mkv`, linked as a picture or named in a `<video>` tag, shows its first frame on the page. An animated GIF or a video plays when you open it on the whole screen, in a loop. A video plays at 25 frames a second and with no sound. Video needs `ffmpeg` on your `PATH`, and the Homebrew cask does not install it, so run `brew install ffmpeg` for it. Without `ffmpeg`, the page shows the name of the video and says so.
 
 ### Where pictures come from
 
