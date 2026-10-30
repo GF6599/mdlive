@@ -337,9 +337,14 @@ impl Pictures {
         }
     }
 
-    /// Starts to play the picture at `source` in the view, when it is an animated GIF.
+    /// Starts to play the picture at `source` in the view, when it is an animated GIF or a video.
     pub fn open_view(&mut self, source: &Source) -> Result<(), String> {
         self.animation = match source {
+            Source::File(path) if video::is_video(path) => Some(Animation::video(
+                self.ffmpeg.as_deref(),
+                path,
+                self.pixel_size(source)?,
+            )?),
             Source::File(path) if !is_svg(path) => Animation::open(path)?,
             _ => None,
         };

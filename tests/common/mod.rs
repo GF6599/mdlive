@@ -3,6 +3,8 @@
 
 use std::cell::RefCell;
 use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::rc::Rc;
 
 use base64::Engine;
@@ -71,4 +73,24 @@ pub fn kitty_pixels(buffer: &Buffer) -> Vec<u8> {
         .map(|(_, data)| data)
         .collect();
     STANDARD.decode(payload).unwrap()
+}
+
+/// A video of 40 by 20 pixels, red for 0.4 s and then blue for 10 s, made with the real ffmpeg,
+/// or `None` when ffmpeg is not installed. At 600 KB of frames it is more than a pipe holds, so
+/// ffmpeg still runs while a test reads it.
+pub fn red_then_blue_clip(dir: &Path) -> Option<PathBuf> {
+    let Some(ffmpeg) = mdlive::find_ffmpeg() else {
+        eprintln!("skipped: ffmpeg is not installed");
+        return None;
+    };
+    let graph = "color=c=red:s=40x20:r=25:d=0.4[a];color=c=blue:s=40x20:r=25:d=10[b];\
+                 [a][b]concat=n=2:v=1:a=0";
+    let status = Command::new(ffmpeg)
+        .args(["-v", "error", "-f", "lavfi", "-i", graph])
+        .args(["-c:v", "mpeg4", "-pix_fmt", "yuv420p"])
+        .arg(dir.join("clip.mkv"))
+        .status()
+        .unwrap();
+    assert!(status.success());
+    Some(dir.join("clip.mkv"))
 }

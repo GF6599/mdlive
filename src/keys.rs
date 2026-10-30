@@ -236,7 +236,7 @@ impl Action {
             Self::PanUp => "pan up, in a picture",
             Self::PanRight => "pan right, in a picture",
             Self::ClosePicture => "close the picture",
-            Self::TogglePlayback => "pause or play, in a GIF",
+            Self::TogglePlayback => "pause or play, in a GIF or a video",
             Self::Edit => "edit the file at this line",
             Self::SelectLines => "select lines",
             Self::CopySelection => "copy the source of the selected lines",

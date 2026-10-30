@@ -8,6 +8,14 @@ use image::{
     AnimationDecoder, DynamicImage, Frame, Frames, ImageDecoder, ImageFormat, ImageReader, Limits,
 };
 
+use crate::video::{self, Stream};
+
+/// The largest frame a video is played at. The terminal scales it to the view, and a larger frame
+/// costs more bytes on each frame than the terminal reads in time: a 1280 by 720 frame of a busy
+/// test video is 216 KB after zlib, 7 MB/s at 25 frames a second.
+const LARGEST_VIDEO_FRAME: (u32, u32) = (1280, 720);
+const VIDEO_FRAME: Duration = Duration::from_millis(1000 / video::FRAMES_PER_SECOND as u64);
+
 /// Browsers show a GIF frame that asks for less than 20 ms for 100 ms, and GIF makers write such
 /// delays for that, so mdlive does the same.
 const SHORTEST_DELAY: Duration = Duration::from_millis(20);
@@ -20,11 +28,10 @@ pub enum Playback {
     Paused,
 }
 
-/// An animated GIF, decoded one frame at a time as each frame comes due, so that a long GIF never
-/// sits in memory whole.
+/// An animated GIF or a video, decoded one frame at a time as each frame comes due, so that a long
+/// one never sits in memory whole.
 pub struct Animation {
-    path: PathBuf,
-    frames: Frames<'static>,
+    reader: Reader,
     shown: DynamicImage,
     /// Counts the frames shown, so that a drawing of the view knows its frame is out of date.
     number: u64,
@@ -43,18 +50,30 @@ impl Animation {
         if format != Some(ImageFormat::Gif) || frames(path)?.take(2).count() < 2 {
             return Ok(None);
         }
-        let mut frames = frames(path)?;
-        let first = next_frame(&mut frames)?.ok_or("the GIF has no frames")?;
-        let mut animation = Self {
+        Self::start(Reader::Gif {
             path: path.to_path_buf(),
-            frames,
+            frames: frames(path)?,
+        })
+        .map(Some)
+    }
+
+    /// The animation of the video at `path`, whose own frames are `size` pixels.
+    pub fn video(ffmpeg: Option<&Path>, path: &Path, size: (u32, u32)) -> Result<Self, String> {
+        let stream = Stream::start(ffmpeg, path, fit(size, LARGEST_VIDEO_FRAME))?;
+        Self::start(Reader::Video(stream))
+    }
+
+    fn start(reader: Reader) -> Result<Self, String> {
+        let mut animation = Self {
+            reader,
             shown: DynamicImage::new_rgba8(1, 1),
             number: 0,
             time_left: Duration::ZERO,
             paused: false,
         };
-        animation.show(first);
-        Ok(Some(animation))
+        let (first, delay) = animation.reader.next_frame()?;
+        animation.show(first, delay);
+        Ok(animation)
     }
 
     pub fn frame(&self) -> (u64, &DynamicImage) {
@@ -78,9 +97,9 @@ impl Animation {
     }
 
     /// Lets `elapsed` pass, and says whether the next frame came due. A frame that comes due late
-    /// shows late, and the frames after it keep their own delays, so a slow terminal slows the GIF
-    /// down and skips no frame. A frame that cannot be read pauses the GIF, so that the reader
-    /// sees the reason once and not at each frame.
+    /// shows late, and the frames after it keep their own delays, so a slow terminal slows the
+    /// animation down and skips no frame. A frame that cannot be read pauses the animation, so
+    /// that the reader sees the reason once and not at each frame.
     pub fn play(&mut self, elapsed: Duration) -> Result<bool, String> {
         if self.paused {
             return Ok(false);
@@ -89,9 +108,9 @@ impl Animation {
             self.time_left -= elapsed;
             return Ok(false);
         }
-        match self.next_frame() {
-            Ok(frame) => {
-                self.show(frame);
+        match self.reader.next_frame() {
+            Ok((frame, delay)) => {
+                self.show(frame, delay);
                 Ok(true)
             }
             Err(reason) => {
@@ -101,24 +120,62 @@ impl Animation {
         }
     }
 
-    fn next_frame(&mut self) -> Result<Frame, String> {
-        if let Some(frame) = next_frame(&mut self.frames)? {
-            return Ok(frame);
-        }
-        self.frames = frames(&self.path)?;
-        next_frame(&mut self.frames)?.ok_or_else(|| "the GIF has no frames".to_string())
-    }
-
-    fn show(&mut self, frame: Frame) {
-        let delay = Duration::from(frame.delay());
-        self.time_left = if delay < SHORTEST_DELAY {
-            DELAY_OF_A_SHORTER_FRAME
-        } else {
-            delay
-        };
-        self.shown = DynamicImage::ImageRgba8(frame.into_buffer());
+    fn show(&mut self, frame: DynamicImage, delay: Duration) {
+        self.time_left = delay;
+        self.shown = frame;
         self.number += 1;
     }
+}
+
+enum Reader {
+    Gif {
+        path: PathBuf,
+        frames: Frames<'static>,
+    },
+    Video(Stream),
+}
+
+impl Reader {
+    /// The next frame and the time it shows, from the first frame again after the last.
+    fn next_frame(&mut self) -> Result<(DynamicImage, Duration), String> {
+        match self {
+            Self::Gif { path, frames } => {
+                let frame = match next_gif_frame(frames)? {
+                    Some(frame) => frame,
+                    None => {
+                        *frames = self::frames(path)?;
+                        next_gif_frame(frames)?.ok_or("the GIF has no frames")?
+                    }
+                };
+                let delay = Duration::from(frame.delay());
+                let delay = if delay < SHORTEST_DELAY {
+                    DELAY_OF_A_SHORTER_FRAME
+                } else {
+                    delay
+                };
+                Ok((DynamicImage::ImageRgba8(frame.into_buffer()), delay))
+            }
+            Self::Video(stream) => {
+                let frame = match stream.next_frame()? {
+                    Some(frame) => frame,
+                    None => {
+                        stream.restart()?;
+                        stream.next_frame()?.ok_or("the video has no frames")?
+                    }
+                };
+                Ok((frame, VIDEO_FRAME))
+            }
+        }
+    }
+}
+
+/// `size` shrunk to fit inside `largest` with its own shape, and never grown.
+fn fit((wide, high): (u32, u32), largest: (u32, u32)) -> (u32, u32) {
+    let scale = (f64::from(largest.0) / f64::from(wide.max(1)))
+        .min(f64::from(largest.1) / f64::from(high.max(1)))
+        .min(1.0);
+    let shrink = |side: u32| ((f64::from(side) * scale).round() as u32).max(1);
+    (shrink(wide), shrink(high))
 }
 
 /// The decoder takes the limits that `ImageReader` gives every other picture, because `GifDecoder`
@@ -133,7 +190,7 @@ fn frames(path: &Path) -> Result<Frames<'static>, String> {
     Ok(decoder.into_frames())
 }
 
-fn next_frame(frames: &mut Frames<'static>) -> Result<Option<Frame>, String> {
+fn next_gif_frame(frames: &mut Frames<'static>) -> Result<Option<Frame>, String> {
     frames
         .next()
         .transpose()
