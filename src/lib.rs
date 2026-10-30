@@ -1,3 +1,4 @@
+mod animation;
 mod breadcrumb;
 pub mod config;
 mod contents;
@@ -24,6 +25,7 @@ mod wrap;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
@@ -361,7 +363,7 @@ impl Viewer {
             hint_bar::draw(
                 frame,
                 bar,
-                &hint_bar::hints_for(&hint_bar::Mode::Picture),
+                &hint_bar::hints_for(&hint_bar::Mode::Picture(self.pictures.playback())),
                 palette,
             );
             self.draw_status(frame, status);
@@ -531,6 +533,25 @@ impl Viewer {
         self.pictures.take_commands()
     }
 
+    /// The time until the next frame of the GIF in the picture view, or `None` when no frame is
+    /// due, so that the event loop knows how long it may wait for the reader.
+    pub fn until_next_frame(&self) -> Option<Duration> {
+        self.pictures.until_next_frame()
+    }
+
+    /// Lets `elapsed` pass for the GIF in the picture view, and says whether a new frame is due to
+    /// be drawn. A GIF that cannot be read on stops on its frame, with the reason on the status
+    /// line.
+    pub fn play(&mut self, elapsed: Duration) -> bool {
+        match self.pictures.play(elapsed) {
+            Ok(shown) => shown,
+            Err(reason) => {
+                self.show_error(&reason);
+                true
+            }
+        }
+    }
+
     /// Tells the viewer that the terminal cleared the screen, as ratatui does on each resize.
     pub fn screen_cleared(&mut self) {
         self.pictures.screen_cleared();
@@ -685,7 +706,8 @@ impl Viewer {
             | Command::ZoomOut(_)
             | Command::ZoomFit
             | Command::Pan { .. }
-            | Command::ClosePicture => {}
+            | Command::ClosePicture
+            | Command::TogglePlayback => {}
             Command::ToggleHelp => self.help_top = Some(0),
             Command::Back => {
                 self.step_history(|viewer| &mut viewer.back, |viewer| &mut viewer.forward)
@@ -1311,6 +1333,9 @@ impl Viewer {
         };
         match pixel_size(&source) {
             Ok(size) => {
+                if let Err(reason) = self.pictures.open_view(&source) {
+                    self.show_error(&reason);
+                }
                 self.picture_view = Some(PictureView::new(source, size));
                 self.keys.focus = Focus::Picture;
             }
@@ -1330,6 +1355,7 @@ impl Viewer {
             Command::ZoomFit => view.fit(),
             Command::Pan { across, down } => view.pan(across, down),
             Command::ClosePicture | Command::Cancel => self.close_picture(),
+            Command::TogglePlayback => self.pictures.toggle_pause(),
             _ => {}
         }
         Flow::Continue

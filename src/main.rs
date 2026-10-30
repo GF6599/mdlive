@@ -2,7 +2,7 @@ use std::io::{Write, stdout};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::sync::mpsc::{self, Receiver};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -220,8 +220,9 @@ fn follow_zoom(viewer: &mut Viewer, graphics: &mut Option<Graphics>) {
     }
 }
 
-/// Draws the viewer, then waits for a key, a click or a file change, on this one thread. No other
-/// thread reads the terminal, so while the editor runs, every key goes to the editor.
+/// Draws the viewer, then waits for a key, a click, a file change or the next frame of a GIF, on
+/// this one thread. No other thread reads the terminal, so while the editor runs, every key goes
+/// to the editor.
 fn run(
     terminal: &mut ratatui::DefaultTerminal,
     mut viewer: Viewer,
@@ -230,10 +231,13 @@ fn run(
     mut graphics: Option<Graphics>,
 ) -> std::io::Result<()> {
     let mut links: Vec<LinkArea> = Vec::new();
+    let mut clock = Instant::now();
     loop {
         draw_frame(terminal, &mut viewer, &mut links)?;
         let flow = loop {
-            let mut wait = POLL;
+            let mut wait = viewer
+                .until_next_frame()
+                .map_or(POLL, |next| next.min(POLL));
             let ready = || {
                 let event = if event::poll(wait)? {
                     Some(event::read()?)
@@ -253,6 +257,12 @@ fn run(
             })?;
             if let Some(flow) = burst {
                 break flow;
+            }
+            let now = Instant::now();
+            let frame_due = viewer.play(now - clock);
+            clock = now;
+            if frame_due {
+                break Flow::Continue;
             }
             if let Ok(change) = changes.try_recv() {
                 reload(&mut viewer, change);

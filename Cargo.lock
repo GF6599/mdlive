@@ -943,6 +943,7 @@ version = "0.2.0"
 dependencies = [
  "base64",
  "crossterm",
+ "flate2",
  "ignore",
  "image",
  "mermaid-rs-renderer",

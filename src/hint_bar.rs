@@ -5,6 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
+use crate::animation::Playback;
 use crate::keys::{Action, CANCEL, HINT_LETTERS_LISTED, Key, hints, keys_of};
 use crate::theme::Palette;
 
@@ -17,7 +18,7 @@ pub enum Mode {
     Tree,
     TypingFilter,
     Visual,
-    Picture,
+    Picture(Playback),
     Reading(Reading),
 }
 
@@ -78,22 +79,31 @@ pub fn hints_for(mode: &Mode) -> Vec<Hint> {
             pair(Action::NextHeading, Action::PreviousHeading, "section"),
             pair(Action::HalfPageDown, Action::HalfPageUp, "half page"),
         ],
-        Mode::Picture => vec![
-            pair(Action::ZoomIn, Action::ZoomOut, "zoom"),
-            hint(
-                [
-                    Action::PanLeft,
-                    Action::PanDown,
-                    Action::PanUp,
-                    Action::PanRight,
-                ]
-                .map(keys_of)
-                .concat(),
-                "pan",
-            ),
-            hint(keys_of(Action::ZoomFit), "fit"),
-            hint(keys_of(Action::ClosePicture), "close"),
-        ],
+        Mode::Picture(playback) => {
+            let toggle = match playback {
+                Playback::Still => None,
+                Playback::Playing => Some("pause"),
+                Playback::Paused => Some("play"),
+            };
+            let pan = [
+                Action::PanLeft,
+                Action::PanDown,
+                Action::PanUp,
+                Action::PanRight,
+            ]
+            .map(keys_of)
+            .concat();
+            toggle
+                .map(|label| hint(keys_of(Action::TogglePlayback), label))
+                .into_iter()
+                .chain([
+                    pair(Action::ZoomIn, Action::ZoomOut, "zoom"),
+                    hint(pan, "pan"),
+                    hint(keys_of(Action::ZoomFit), "fit"),
+                    hint(keys_of(Action::ClosePicture), "close"),
+                ])
+                .collect()
+        }
         Mode::Reading(reading) => reading_hints(reading),
     }
 }

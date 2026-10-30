@@ -1,10 +1,14 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use flate2::Compression;
+use flate2::write::ZlibEncoder;
 use image::imageops::{self, FilterType};
 use image::{DynamicImage, ImageReader, Rgba, RgbaImage};
 use ratatui::Frame;
@@ -17,6 +21,7 @@ use ratatui_image::sliced::{SignedPosition, SlicedImage, SlicedProtocol};
 use resvg::tiny_skia::{Pixmap, Transform};
 use resvg::usvg;
 
+use crate::animation::{Animation, Playback};
 use crate::picture_view::{PictureView, Window};
 use crate::theme::Palette;
 
@@ -38,6 +43,10 @@ pub enum Source {
 /// The raster picture the terminal holds for the view.
 struct Held {
     path: PathBuf,
+    /// The number of the frame the terminal holds, or `None` when it may have dropped the data.
+    frame: Option<u64>,
+    /// The Kitty image id of the picture.
+    image: u32,
     /// The size of the picture in pixels, or why it cannot be sent.
     sent: Result<(u32, u32), String>,
 }
@@ -50,10 +59,12 @@ pub struct Pictures {
     /// The pixels of each picture in `loaded` at its size on the page, so that a picture can be
     /// sent to the terminal again without a second decode.
     pixels: HashMap<Placed, DynamicImage>,
-    /// The last frame of the picture view, drawn again only when the part shown changes.
-    view: Option<(Source, Window, Result<SlicedProtocol, String>)>,
+    /// The last drawing of the picture view, with the number of its frame, drawn again only when
+    /// the part shown or the frame changes.
+    view: Option<(Source, Window, u64, Result<SlicedProtocol, String>)>,
     /// The pixels of the raster picture in the view, decoded once for every frame of it.
     decoded: Option<(PathBuf, DynamicImage)>,
+    animation: Option<Animation>,
     held: Option<Held>,
     /// The Kitty commands for the picture the terminal holds, which go out after the cells of the
     /// next frame.
@@ -80,6 +91,7 @@ impl Pictures {
             pixels: HashMap::new(),
             view: None,
             decoded: None,
+            animation: None,
             held: None,
             commands: String::new(),
         };
@@ -252,27 +264,35 @@ impl Pictures {
             return;
         }
         if let Some(path) = self.placed_directly(&view.source) {
-            match self.hold(&path) {
+            let replaced = self.hold(&path);
+            let Some(held) = &self.held else {
+                return;
+            };
+            match &held.sent {
                 Ok(size) => {
                     frame.render_widget(Clear, shown);
-                    self.commands.push_str(&place(size, &window, shown));
+                    self.commands
+                        .push_str(&place(held.image, *size, &window, shown));
+                    if let Some(replaced) = replaced {
+                        self.commands.push_str(&delete(replaced));
+                    }
                 }
                 Err(reason) => frame.render_widget(
-                    Paragraph::new(Span::styled(reason, palette.picture_note())),
+                    Paragraph::new(Span::styled(reason.as_str(), palette.picture_note())),
                     area,
                 ),
             }
             return;
         }
-        let current = self
-            .view
-            .as_ref()
-            .is_some_and(|(source, shown, _)| *source == view.source && *shown == window);
+        let number = self.frame_number();
+        let current = self.view.as_ref().is_some_and(|(source, shown, drawn, _)| {
+            *source == view.source && *shown == window && *drawn == number
+        });
         if !current {
             let drawn = self.draw_window(&view.source, &window, palette);
-            self.view = Some((view.source.clone(), window, drawn));
+            self.view = Some((view.source.clone(), window, number, drawn));
         }
-        let Some((_, _, drawn)) = &mut self.view else {
+        let Some((_, _, _, drawn)) = &mut self.view else {
             return;
         };
         match drawn {
@@ -292,17 +312,59 @@ impl Pictures {
     pub fn close_view(&mut self) {
         self.view = None;
         self.decoded = None;
+        self.animation = None;
         self.loaded.clear();
-        if let Some(Held { sent: Ok(_), .. }) = self.held.take() {
-            self.commands
-                .push_str(&kitty(&format!("a=d,d=I,i={VIEW_IMAGE},q=2"), ""));
+        if let Some(Held {
+            image, sent: Ok(_), ..
+        }) = self.held.take()
+        {
+            self.commands.push_str(&delete(image));
         }
+    }
+
+    /// Starts to play the picture at `source` in the view, when it is an animated GIF.
+    pub fn open_view(&mut self, source: &Source) -> Result<(), String> {
+        self.animation = match source {
+            Source::File(path) if !is_svg(path) => Animation::open(path)?,
+            _ => None,
+        };
+        Ok(())
+    }
+
+    pub fn playback(&self) -> Playback {
+        self.animation
+            .as_ref()
+            .map_or(Playback::Still, Animation::playback)
+    }
+
+    pub fn until_next_frame(&self) -> Option<Duration> {
+        self.animation.as_ref()?.until_next_frame()
+    }
+
+    pub fn toggle_pause(&mut self) {
+        if let Some(animation) = &mut self.animation {
+            animation.toggle_pause();
+        }
+    }
+
+    pub fn play(&mut self, elapsed: Duration) -> Result<bool, String> {
+        self.animation
+            .as_mut()
+            .map_or(Ok(false), |animation| animation.play(elapsed))
     }
 
     /// A cleared screen loses the placement of the view, and the terminal may then drop the data
     /// of its picture, so the next frame sends the picture again.
     pub fn screen_cleared(&mut self) {
-        self.held = None;
+        if let Some(held) = &mut self.held {
+            held.frame = None;
+        }
+    }
+
+    fn frame_number(&self) -> u64 {
+        self.animation
+            .as_ref()
+            .map_or(0, |animation| animation.frame().0)
     }
 
     pub fn take_commands(&mut self) -> String {
@@ -322,22 +384,41 @@ impl Pictures {
         }
     }
 
-    /// Sends the picture at `path` to the terminal, unless the terminal holds it already.
-    fn hold(&mut self, path: &Path) -> Result<(u32, u32), String> {
-        if let Some(held) = &self.held
-            && held.path == path
-        {
-            return held.sent.clone();
-        }
-        let sent = decode(path).map(|image| {
-            self.commands.push_str(&transmit(&image));
-            (image.width(), image.height())
+    /// Sends the frame on show of the picture at `path` to the terminal, unless the terminal holds
+    /// it already. A new frame goes under the other of the two view ids, and the id of the frame
+    /// it replaces comes back, to delete once the new frame is placed.
+    fn hold(&mut self, path: &Path) -> Option<u32> {
+        let number = self.frame_number();
+        let replaced = match &self.held {
+            Some(held) if held.path == path && held.frame == Some(number) => return None,
+            Some(Held {
+                image, sent: Ok(_), ..
+            }) => Some(*image),
+            _ => None,
+        };
+        let image = match replaced {
+            Some(VIEW_IMAGE) => OTHER_VIEW_IMAGE,
+            _ => VIEW_IMAGE,
+        };
+        let decoded;
+        let pixels = match &self.animation {
+            Some(animation) => Ok(animation.frame().1),
+            None => {
+                decoded = decode(path);
+                decoded.as_ref().map_err(String::clone)
+            }
+        };
+        let sent = pixels.map(|pixels| {
+            self.commands.push_str(&transmit(pixels, image));
+            (pixels.width(), pixels.height())
         });
         self.held = Some(Held {
             path: path.to_path_buf(),
-            sent: sent.clone(),
+            frame: Some(number),
+            image,
+            sent,
         });
-        sent
+        replaced
     }
 
     fn draw_window(
@@ -351,6 +432,9 @@ impl Pictures {
             Source::File(path) if is_svg(path) => {
                 let data = std::fs::read(path).map_err(|error| format!("cannot read: {error}"))?;
                 draw_svg_window(&data, path.parent(), window)?
+            }
+            Source::File(_) if let Some(animation) = &self.animation => {
+                crop_window(animation.frame().1, window)
             }
             Source::File(path) => {
                 if self
@@ -520,6 +604,10 @@ fn source_rect((width, height): (u32, u32), window: &Window) -> (u32, u32, u32, 
 /// The Kitty image id of the picture the view holds. ratatui-image picks a random id for each
 /// picture of the page, so a fixed id meets one of them with a chance of one in four billion.
 const VIEW_IMAGE: u32 = 0x00ED_1A0F;
+/// The id of every second frame of a GIF. The terminal leaves the screen blank for a moment when
+/// a picture is sent again under its own id, so a frame goes under the id the screen does not
+/// show.
+const OTHER_VIEW_IMAGE: u32 = VIEW_IMAGE + 1;
 /// The terminal replaces a placement that has the id of an earlier one, so each frame of the view
 /// takes the place of the frame before it.
 const VIEW_PLACEMENT: u32 = 1;
@@ -530,20 +618,22 @@ fn kitty(control: &str, payload: &str) -> String {
     format!("\x1b_G{control};{payload}\x1b\\")
 }
 
-/// A picture with no alpha goes as RGB, a quarter fewer bytes than RGBA.
-fn transmit(image: &DynamicImage) -> String {
-    let (format, bytes) = if image.color().has_alpha() {
+/// A picture with no alpha goes as RGB, a quarter fewer bytes than RGBA. The pixels go through
+/// zlib, which takes a GIF frame of a recorded terminal from 3.6 MB down to about 100 KB.
+fn transmit(image: &DynamicImage, id: u32) -> String {
+    let (format, pixels) = if image.color().has_alpha() {
         (32, image.to_rgba8().into_raw())
     } else {
         (24, image.to_rgb8().into_raw())
     };
+    let bytes = compress(&pixels);
     let chunks: Vec<&[u8]> = bytes.chunks(CHUNK).collect();
     let mut escapes = String::with_capacity(bytes.len() / 3 * 4 + chunks.len() * 16 + 64);
     for (index, chunk) in chunks.iter().enumerate() {
         let more = u8::from(index + 1 < chunks.len());
         let control = if index == 0 {
             format!(
-                "a=t,f={format},s={},v={},i={VIEW_IMAGE},q=2,m={more}",
+                "a=t,f={format},o=z,s={},v={},i={id},q=2,m={more}",
                 image.width(),
                 image.height()
             )
@@ -555,12 +645,24 @@ fn transmit(image: &DynamicImage) -> String {
     escapes
 }
 
-/// The escapes that show the part `window` of the held picture of `size` on the cells of `shown`.
-/// `C=1` keeps the cursor still, because a cursor moved below the last row scrolls the screen.
-fn place(size: (u32, u32), window: &Window, shown: Rect) -> String {
+fn compress(pixels: &[u8]) -> Vec<u8> {
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+    // A write to a Vec cannot fail.
+    let _ = encoder.write_all(pixels);
+    encoder.finish().unwrap_or_default()
+}
+
+fn delete(image: u32) -> String {
+    kitty(&format!("a=d,d=I,i={image},q=2"), "")
+}
+
+/// The escapes that show the part `window` of the held picture `image` of `size` on the cells of
+/// `shown`. `C=1` keeps the cursor still, because a cursor moved below the last row scrolls the
+/// screen.
+fn place(image: u32, size: (u32, u32), window: &Window, shown: Rect) -> String {
     let (x, y, wide, high) = source_rect(size, window);
     let control = format!(
-        "a=p,i={VIEW_IMAGE},p={VIEW_PLACEMENT},x={x},y={y},w={wide},h={high},c={},r={},C=1,q=2",
+        "a=p,i={image},p={VIEW_PLACEMENT},x={x},y={y},w={wide},h={high},c={},r={},C=1,q=2",
         shown.width, shown.height
     );
     format!(
