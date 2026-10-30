@@ -60,6 +60,7 @@ pub enum Command {
         down: i32,
     },
     ClosePicture,
+    TogglePlayback,
     Edit,
     SelectLines,
     CopySelection,
@@ -184,6 +185,7 @@ pub enum Action {
     PanUp,
     PanRight,
     ClosePicture,
+    TogglePlayback,
     Edit,
     SelectLines,
     CopySelection,
@@ -234,6 +236,7 @@ impl Action {
             Self::PanUp => "pan up, in a picture",
             Self::PanRight => "pan right, in a picture",
             Self::ClosePicture => "close the picture",
+            Self::TogglePlayback => "pause or play, in a GIF",
             Self::Edit => "edit the file at this line",
             Self::SelectLines => "select lines",
             Self::CopySelection => "copy the source of the selected lines",
@@ -264,7 +267,8 @@ impl Action {
             | Self::PanDown
             | Self::PanUp
             | Self::PanRight
-            | Self::ClosePicture => Group::Pictures,
+            | Self::ClosePicture
+            | Self::TogglePlayback => Group::Pictures,
             Self::SelectLines | Self::CopySelection => Group::Select,
             Self::Quit | Self::ToggleHelp => Group::Other,
             _ => Group::Move,
@@ -334,6 +338,7 @@ impl Action {
                 down: 0,
             },
             Self::ClosePicture => Command::ClosePicture,
+            Self::TogglePlayback => Command::TogglePlayback,
             Self::Edit => Command::Edit,
             Self::SelectLines => Command::SelectLines,
             Self::CopySelection => Command::CopySelection,
@@ -535,6 +540,7 @@ const BINDINGS: &[Binding] = &[
     picture(&[Key::plain('l')], Action::PanRight),
     picture(&[Key::named(KeyCode::Right)], Action::PanRight),
     picture(&[Key::plain('q')], Action::ClosePicture),
+    picture(&[Key::plain(' ')], Action::TogglePlayback),
 ];
 
 /// Quits from anywhere, even partway through a key sequence.
