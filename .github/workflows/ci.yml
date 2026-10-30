@@ -49,4 +49,8 @@ jobs:
           just-version: 1.59.0
       # rust-cache keeps ~/.cargo/bin, so this compiles cargo-deny only on a cache miss.
       - run: just tools
+      # The video tests run the real ffmpeg, and a test skips with a note where it is missing,
+      # so Linux installs it to keep them running in CI.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends ffmpeg
       - run: just check
