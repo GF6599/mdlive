@@ -20,6 +20,7 @@ use common::{HEADER_ROWS, below_header};
 
 const RED: Rgba<u8> = Rgba([255, 0, 0, 255]);
 const BLUE: Rgba<u8> = Rgba([0, 0, 255, 255]);
+const CLEAR: Rgba<u8> = Rgba([0, 0, 0, 0]);
 const DELAY: Duration = Duration::from_millis(100);
 /// The screen under the breadcrumb: a page of 40 by 10 cells, the hint bar and the status line.
 const WIDTH: u16 = 40;
@@ -280,4 +281,43 @@ fn sends_each_frame_under_the_other_picture_id_and_then_deletes_the_frame_before
     assert_eq!(placed, second);
     assert_eq!(deleted, first);
     assert!(sent_at < placed_at && placed_at < deleted_at, "{next:?}");
+}
+
+/// In a Kitty terminal, a GIF frame with no clear pixel goes to the terminal as RGB, and a frame
+/// with a clear pixel goes as RGBA.
+///
+/// Why it matters: Ghostty showed each opaque GIF frame sent as RGBA with a flash, while the same
+/// frames sent as RGB played smoothly. A clear pixel still needs RGBA, so that the terminal
+/// background shows through it.
+#[test]
+fn sends_an_opaque_gif_frame_as_rgb_and_a_clear_frame_as_rgba() {
+    // Given: a GIF of red, blue and then clear frames, open in the view of a Kitty terminal
+    let dir = tempfile::tempdir().unwrap();
+    gif(dir.path(), "clip.gif", &[RED, BLUE, CLEAR]);
+    let mut viewer = viewer(dir.path(), "clip.gif", ProtocolType::Kitty);
+    let (mut terminal, output) = common::terminal(WIDTH, HEIGHT + HEADER_ROWS);
+    let mut links = Vec::new();
+    draw_frame(&mut terminal, &mut viewer, &mut links).unwrap();
+    press(&mut viewer, "]p");
+    viewer.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    draw_frame(&mut terminal, &mut viewer, &mut links).unwrap();
+    output.take();
+
+    // When: the delay of the red frame passes
+    viewer.play(DELAY);
+    draw_frame(&mut terminal, &mut viewer, &mut links).unwrap();
+    let blue = output.take();
+
+    // Then: the opaque blue frame is sent in the 24-bit RGB format
+    let (_, format) = kitty_value(&blue, "a=t,", "f").expect("the blue frame is sent");
+    assert_eq!(format, "24");
+
+    // When: the delay of the blue frame passes
+    viewer.play(DELAY);
+    draw_frame(&mut terminal, &mut viewer, &mut links).unwrap();
+    let clear = output.take();
+
+    // Then: the clear frame is sent in the 32-bit RGBA format
+    let (_, format) = kitty_value(&clear, "a=t,", "f").expect("the clear frame is sent");
+    assert_eq!(format, "32");
 }
