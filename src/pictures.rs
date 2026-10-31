@@ -668,10 +668,11 @@ fn kitty(control: &str, payload: &str) -> String {
     format!("\x1b_G{control};{payload}\x1b\\")
 }
 
-/// A picture with no alpha goes as RGB, a quarter fewer bytes than RGBA. The pixels go through
-/// zlib, which takes a GIF frame of a recorded terminal from 3.6 MB down to about 100 KB.
+/// A picture with no clear pixel goes as RGB, a quarter fewer bytes than RGBA. Ghostty also shows
+/// each frame of a GIF with a flash when the frame goes as RGBA. The pixels go through zlib, which
+/// takes a GIF frame of a recorded terminal from 3.6 MB down to about 100 KB.
 fn transmit(image: &DynamicImage, id: u32) -> String {
-    let (format, pixels) = if image.color().has_alpha() {
+    let (format, pixels) = if has_clear_pixel(image) {
         (32, image.to_rgba8().into_raw())
     } else {
         (24, image.to_rgb8().into_raw())
@@ -693,6 +694,14 @@ fn transmit(image: &DynamicImage, id: u32) -> String {
         escapes.push_str(&kitty(&control, &STANDARD.encode(chunk)));
     }
     escapes
+}
+
+/// A GIF decoder gives every frame as RGBA, even a frame with no clear pixel.
+fn has_clear_pixel(image: &DynamicImage) -> bool {
+    match image {
+        DynamicImage::ImageRgba8(pixels) => pixels.pixels().any(|pixel| pixel[3] < u8::MAX),
+        other => other.color().has_alpha(),
+    }
 }
 
 fn compress(pixels: &[u8]) -> Vec<u8> {
