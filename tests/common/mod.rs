@@ -94,3 +94,24 @@ pub fn red_then_blue_clip(dir: &Path) -> Option<PathBuf> {
     assert!(status.success());
     Some(dir.join("clip.mkv"))
 }
+
+/// The ffmpeg processes that this test process started and has not waited for. An ffmpeg that ends
+/// on a closed pipe and is never waited for stays as a zombie, which macOS lists as `<defunct>`
+/// and Linux under its name, so a zombie child counts too. A test that counts them is the only
+/// one in its file, because the tests of one file run at once and start ffmpeg processes too.
+pub fn ffmpeg_children() -> usize {
+    let output = Command::new("ps")
+        .args(["-A", "-o", "ppid=,stat=,comm="])
+        .output()
+        .unwrap();
+    let me = std::process::id().to_string();
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| {
+            let mut fields = line.split_whitespace();
+            let (parent, state) = (fields.next(), fields.next().unwrap_or(""));
+            let command = fields.collect::<Vec<_>>().join(" ");
+            parent == Some(me.as_str()) && (command.contains("ffmpeg") || state.starts_with('Z'))
+        })
+        .count()
+}
