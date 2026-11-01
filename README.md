@@ -54,7 +54,7 @@ The mouse works too: the wheel scrolls, a click picks a contents entry, a tree r
 - **Copy.** `y` puts the selected source on the clipboard: through `pbcopy` on macOS, and through an OSC 52 code elsewhere, which the terminal must allow.
 - **Maths.** `$…$` and `$$…$$` show as Unicode text. A matrix or a `cases` block takes one row per line, with its columns aligned.
 - **Diagrams.** A Mermaid block shows as a picture in a terminal that draws pictures, and as box text in one that does not.
-- **Pictures.** A terminal with the Kitty, iTerm2 or Sixel picture protocol, such as Ghostty, kitty, WezTerm or iTerm2, draws them in full. Other terminals draw them in half blocks. A picture from the web is never fetched, so opening a page makes no network call.
+- **Pictures.** A terminal with the Kitty, iTerm2 or Sixel picture protocol, such as Ghostty, kitty, WezTerm or iTerm2, draws them in full. Other terminals, such as Terminal.app, draw them in half blocks. A half block shows two pixels per cell, so a picture there is blurry and small text in it is hard to read. A larger font gives fewer cells, so the picture gets fewer pixels. A picture from the web is never fetched, so opening a page makes no network call.
 - **GIFs and videos.** A video file, `.mp4`, `.webm`, `.mov` or `.mkv`, linked as a picture or named in a `<video>` tag, shows its first frame on the page. An animated GIF or a video plays when you open it on the whole screen, in a loop. A video plays at 25 frames a second and with no sound. Video needs `ffmpeg` on your `PATH`, and the Homebrew cask does not install it, so run `brew install ffmpeg` for it. Without `ffmpeg`, the page shows the name of the video and says so.
 
 ### Where pictures come from
