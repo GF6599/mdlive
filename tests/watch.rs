@@ -18,17 +18,16 @@ const ARRIVAL: Duration = Duration::from_secs(5);
 /// redraw on each editor swap file.
 #[test]
 fn reports_saves_of_the_file_and_ignores_its_neighbours() {
-    // Given: a watched file in a folder
+    // Given: a watch on a file in a folder that is still empty
+    // FSEvents can replay a write made just before the watch starts, at any delay, so a file
+    // written first can send a change into the quiet window below.
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("doc.md");
-    fs::write(&file, "one").unwrap();
     let (sender, changes) = mpsc::channel();
     let _watch = watch_file(&file, DEBOUNCE, move |change| {
         let _ = sender.send(change);
     })
     .unwrap();
-    // FSEvents reports writes made just before a watch starts, so let those pass first.
-    while changes.recv_timeout(QUIET).is_ok() {}
 
     // When: another file in the folder is written
     fs::write(dir.path().join("other.md"), "x").unwrap();
@@ -37,6 +36,12 @@ fn reports_saves_of_the_file_and_ignores_its_neighbours() {
         changes.recv_timeout(QUIET).err(),
         Some(RecvTimeoutError::Timeout)
     );
+
+    // When: the file is created
+    fs::write(&file, "one").unwrap();
+    // Then: a change arrives
+    assert_eq!(changes.recv_timeout(ARRIVAL), Ok(Ok(())));
+    while changes.recv_timeout(QUIET).is_ok() {}
 
     // When: the file is written in place
     fs::write(&file, "two").unwrap();
@@ -58,19 +63,16 @@ fn reports_saves_of_the_file_and_ignores_its_neighbours() {
 /// save of the page they left must not replace what they read.
 #[test]
 fn follows_the_file_the_reader_opens() {
-    // Given: a watch on one file, moved to a second file
+    // Given: a watch on one file, moved to a second file, in a folder that is still empty
     let dir = tempfile::tempdir().unwrap();
     let first = dir.path().join("first.md");
     let second = dir.path().join("second.md");
-    fs::write(&first, "one").unwrap();
-    fs::write(&second, "one").unwrap();
     let (sender, changes) = mpsc::channel();
     let mut watch = OpenFileWatch::new(DEBOUNCE, move |change| {
         let _ = sender.send(change);
     });
     watch.follow(&first).unwrap();
     watch.follow(&second).unwrap();
-    while changes.recv_timeout(QUIET).is_ok() {}
 
     // When: the first file is written
     fs::write(&first, "two").unwrap();
