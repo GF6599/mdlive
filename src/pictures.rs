@@ -18,6 +18,7 @@ use ratatui::style::Color;
 use ratatui::text::Span;
 use ratatui::widgets::{Clear, Paragraph};
 use ratatui_image::picker::{Picker, ProtocolType};
+use ratatui_image::protocol::halfblocks::Halfblocks;
 use ratatui_image::sliced::{SignedPosition, SlicedImage, SlicedProtocol};
 use resvg::tiny_skia::{Pixmap, Transform};
 use resvg::usvg;
@@ -447,6 +448,7 @@ impl Pictures {
         window: &Window,
         palette: &Palette,
     ) -> Result<SlicedProtocol, String> {
+        let drawn = cell_pixels(&self.picker, window.columns, window.rows);
         let image = match source {
             Source::Svg(svg) => draw_svg_window(svg.as_bytes(), None, window)?,
             Source::File(path) if is_svg(path) => {
@@ -454,7 +456,7 @@ impl Pictures {
                 draw_svg_window(&data, path.parent(), window)?
             }
             Source::File(_) if let Some(animation) = &self.animation => {
-                crop_window(animation.frame().1, window)
+                crop_window(animation.frame().1, window, drawn)
             }
             Source::File(path) => {
                 if self
@@ -467,7 +469,7 @@ impl Pictures {
                 let Some((_, image)) = &self.decoded else {
                     return Err("cannot read the picture".to_string());
                 };
-                crop_window(image, window)
+                crop_window(image, window, drawn)
             }
         };
         encode(
@@ -553,6 +555,8 @@ fn load(
 
 /// Half blocks and sixel have no clear pixel, so the transparent parts of a picture take the page
 /// colour there. Kitty and iTerm2 keep them clear, and the terminal background shows through.
+/// Half blocks take the cell size as it is, because the slicer reads the size in cells from the
+/// pixels of the picture and the font size, and the picture comes at two pixels per cell.
 fn encode(
     picker: &Picker,
     image: DynamicImage,
@@ -565,7 +569,11 @@ fn encode(
         }
         _ => image,
     };
-    SlicedProtocol::new(picker, image, Some(size)).map_err(|error| format!("cannot draw: {error}"))
+    match picker.protocol_type() {
+        ProtocolType::Halfblocks => Halfblocks::new(image, size).map(SlicedProtocol::Halfblocks),
+        _ => SlicedProtocol::new(picker, image, Some(size)),
+    }
+    .map_err(|error| format!("cannot draw: {error}"))
 }
 
 fn on_page_colour(image: &DynamicImage, colour: Color) -> DynamicImage {
@@ -583,9 +591,7 @@ fn page_pixels(
     ffmpeg: Option<&Path>,
     placed: &Placed,
 ) -> Result<DynamicImage, String> {
-    let font = picker.font_size();
-    let wide = u32::from(placed.columns) * u32::from(font.width);
-    let high = u32::from(placed.rows) * u32::from(font.height);
+    let (wide, high) = cell_pixels(picker, placed.columns, placed.rows);
     let image = match &placed.source {
         Source::Svg(svg) => draw_svg(svg.as_bytes(), None, wide, high)?,
         Source::File(path) if is_svg(path) => {
@@ -631,14 +637,25 @@ fn decode(path: &Path, ffmpeg: Option<&Path>) -> Result<DynamicImage, String> {
         .map_err(|error| format!("cannot read: {error}"))
 }
 
-/// The part of `image` that `window` shows, at the pixels the frame draws.
-fn crop_window(image: &DynamicImage, window: &Window) -> DynamicImage {
-    let (x, y, wide, high) = source_rect((image.width(), image.height()), window);
-    image.crop_imm(x, y, wide, high).resize_exact(
-        window.pixels_wide,
-        window.pixels_high,
-        FilterType::Triangle,
+/// The pixels that `columns` by `rows` cells show. A half block shows two pixels in a cell, one
+/// above the other, so a picture drawn at the font size is only scaled down again.
+fn cell_pixels(picker: &Picker, columns: u16, rows: u16) -> (u32, u32) {
+    if picker.protocol_type() == ProtocolType::Halfblocks {
+        return (u32::from(columns), u32::from(rows) * 2);
+    }
+    let font = picker.font_size();
+    (
+        u32::from(columns) * u32::from(font.width),
+        u32::from(rows) * u32::from(font.height),
     )
+}
+
+/// The part of `image` that `window` shows, at the `drawn` pixels of its cells.
+fn crop_window(image: &DynamicImage, window: &Window, (wide, high): (u32, u32)) -> DynamicImage {
+    let (x, y, crop_wide, crop_high) = source_rect((image.width(), image.height()), window);
+    image
+        .crop_imm(x, y, crop_wide, crop_high)
+        .resize_exact(wide, high, FilterType::Triangle)
 }
 
 /// The whole pixels of a picture of `size` that `window` shows: the left, the top, the width and
